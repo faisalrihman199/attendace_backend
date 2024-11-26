@@ -1,0 +1,100 @@
+<!-- Subscription Form -->
+<form id="subscription-form" style="max-width: 400px; margin: auto;">
+  <h2>COMPLETE YOUR SUBSCRIPTION</h2>
+  <p>Enter your credit card information to start your subscription.</p>
+  
+  <!-- Cardholder Name -->
+  <label for="cardholder-name">Cardholder Name</label>
+  <input id="cardholder-name" type="text" placeholder="Full name on card" required style="width: 100%; padding: 10px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ccc;">
+  
+  <!-- Card Information (Stripe Elements) -->
+  <label for="card-element">Card Information</label>
+  <div id="card-element" style="padding: 10px; border: 1px solid #ccc; border-radius: 5px; margin-bottom: 10px;">
+    <!-- Stripe will inject the card input here -->
+  </div>
+
+  <!-- Error Handling -->
+  <div id="card-errors" role="alert" style="color: red; margin-bottom: 10px;"></div>
+
+  <!-- Country or Region -->
+  <label for="country">Country or Region</label>
+  <select id="country" name="country" style="width: 100%; padding: 10px; margin-bottom: 20px; border-radius: 5px; border: 1px solid #ccc;">
+    <option value="US">US</option>
+    <!-- Add other countries if needed -->
+  </select>
+
+  <!-- Submit Button -->
+  <button id="submit" type="submit" style="background-color: #1e87f0; color: white; padding: 15px; width: 100%; border: none; border-radius: 5px; cursor: pointer;">
+    Subscribe
+  </button>
+</form>
+
+<!-- Stripe JS Integration -->
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+ var stripe = Stripe('pk_test_51PkvQAJnCuHDmbHeWHW7KiCwby2II1wzS8LLXfGK0LEHtjyC55ytBUJXaxPsyB4Hmv9I0hUA2xw9ahjOqrKjaMew001f4u75D0');
+ var elements = stripe.elements();
+
+ // Create the card element and mount it
+ var card = elements.create('card', {
+   style: {
+     base: {
+       fontSize: '16px',
+       color: '#32325d',
+       '::placeholder': {
+         color: '#aab7c4'
+       }
+     }
+   }
+ });
+ card.mount('#card-element');
+
+ // Handle form submission
+ var form = document.getElementById('subscription-form');
+ form.addEventListener('submit', function(event) {
+   event.preventDefault();
+
+   // Clear any previous errors
+   var cardErrors = document.getElementById('card-errors');
+   cardErrors.textContent = '';
+
+   stripe.createPaymentMethod({
+     type: 'card',
+     card: card,
+     billing_details: {
+       name: document.getElementById('cardholder-name').value,
+       address: {
+         country: document.getElementById('country').value
+       }
+     }
+   }).then(function(result) {
+    console.log("result is ",result)
+     if (result.error) {
+       // Show error to the user
+       cardErrors.textContent = result.error.message;
+     } else {
+       // Log the Payment Method ID
+       console.log('Payment Method ID:', result.paymentMethod.id);
+
+       // Send payment method to backend to create subscription
+       fetch('http://localhost:5000/api/user/createSubscription/?price=30&userId=7', {
+         method: 'post',
+         headers: {
+           'Content-Type': 'application/json',
+           'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MywiZW1haWwiOiJhZG1pbkBnbWFpbC5jb20iLCJyb2xlIjoic3VwZXJBZG1pbiIsImlhdCI6MTczMjMwMjkyNCwiZXhwIjoxNzMyOTA3NzI0fQ.3my8bHLj_wyGRJGCKDesEAdtvoNwy8o7v0mc6TW7ol0'
+         },
+         body: JSON.stringify({
+          paymentMethodId: result.paymentMethod.id
+         }),
+       }).then(function(response) {
+         return response.json();
+       }).then(function(subscription) {
+         console.log('Subscription successful', subscription);
+         // Optionally, redirect or show success message to the user
+       }).catch(function(error) {
+         console.error('Error creating subscription:', error);
+       });
+     }
+   });
+ });
+</script>
