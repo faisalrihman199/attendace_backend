@@ -12,4 +12,5 @@ router.post("/checkIn",controllers.Athelete.checkInByPin)
 router.get("/getAttendence",authmiddleware.authenticate("jwt",{session:false}),controllers.Athelete.getAthleteCheckins)
 router.get("/getAttendencePdf",authmiddleware.authenticate("jwt",{session:false}),controllers.Athelete.getAthleteCheckinsPdf)
 router.post("/fileUpload",authmiddleware.authenticate("jwt",{session:false}),upload2.single("file"),controllers.Athelete.bulkUploadAthletes)
+router.get("/checkPin",authmiddleware.authenticate("jwt",{session:false}),controllers.Athelete.checkPin)
 module.exports = router

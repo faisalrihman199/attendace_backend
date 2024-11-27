@@ -768,14 +768,28 @@ exports.setBusinessStatusInactive = async (req, res) => {
 
 exports.getAthleteGroupsByCategory = async (req, res) => {
     try {
+
         const user = req.user; // Get the authenticated user from the request
+        let userId = user.id; // Get the user ID
+        if(user.role === "superAdmin"){
+            userId = req.query.userId;
+        }
 
         // Find the business associated with the user
         const business = await model.business.findOne({
             where: {
-                userId: user.id // Fetch the business linked to the user
+                userId
             }
         });
+        console.log("business is ",business);
+        
+        const reporting = await model.reporting.findOne({
+            where: {
+                businessId: business.id 
+            }
+        })
+        const pinLength = reporting.pinLength;
+        
 
         // If no business is found, return an error
         if (!business) {
@@ -811,82 +825,8 @@ exports.getAthleteGroupsByCategory = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: 'Athlete groups retrieved successfully.',
-            data: response // Return the categorized data
-        });
-    } catch (error) {
-        console.error("Error retrieving athlete groups:", error);
-        return res.status(500).json({
-            success: false,
-            message: "An error occurred while retrieving athlete groups.",
-            error: error.message
-        });
-    }
-};
-
-exports.getAthleteGroupsByCategory = async (req, res) => {
-    try {
-        const user = req.user; // Get the authenticated user from the request
-        let userId = user.id; // Default to the authenticated user's ID
-
-        // Check if the user is a superAdmin
-        if (user.role === 'superAdmin') {
-            // Get userId from query parameters if provided
-            userId = req.query.userId;
-        }
-
-        // Get the name query parameter if provided
-        const nameFilter = req.query.name;
-
-        // Find the business associated with the user or the specified userId
-        const business = await model.business.findOne({
-            where: {
-                userId: userId // Fetch the business linked to the user or specified userId
-            }
-        });
-
-        // If no business is found, return an error
-        if (!business) {
-            return res.status(404).json({
-                success: false,
-                message: "No business found for this user."
-            });
-        }
-
-        // Build the where clause for the query
-        const whereClause = {
-            businessId: business.id
-        };
-
-        // Add name filtering if name is provided
-        if (nameFilter) {
-            whereClause.groupName = { [Op.like]: `%${nameFilter}%` }; // Use contains-like query
-        }
-
-        // Fetch athlete groups based on the business ID and name filter
-        const athleteGroups = await model.AthleteGroup.findAll({
-            where: whereClause
-        });
-
-        // Initialize the response objects for teams and classes
-        const response = {
-            teams: [],
-            classes: []
-        };
-
-        // Categorize athlete groups into teams and classes
-        athleteGroups.forEach(group => {
-            if (group.category === 'team') {
-                response.teams.push(group); // Add to teams array
-            } else if (group.category === 'class') {
-                response.classes.push(group); // Add to classes array
-            }
-        });
-
-        // Return the categorized athlete groups
-        return res.status(200).json({
-            success: true,
-            message: 'Athlete groups retrieved successfully.',
-            data: response // Return the categorized data
+            data: response ,// Return the categorized data
+            pinLength:reporting.pinLength
         });
     } catch (error) {
         console.error("Error retrieving athlete groups:", error);
@@ -1018,6 +958,9 @@ exports.getAllAthleteGroups = async (req, res) => {
         // Find the business associated with the userId
         const business = await model.business.findOne({ where: { userId } });
 
+        const reporting = await model.reporting.findOne({ where: { businessId: business.id } });
+        console.log("reporting is ",reporting)
+
         if (!business) {
             return res.status(404).json({ success: false, message: 'Business not found for the provided user.' });
         }
@@ -1048,6 +991,7 @@ exports.getAllAthleteGroups = async (req, res) => {
                 totalPages: Math.ceil(athleteGroups.count / limit), // Calculate total pages
                 currentPage: parseInt(page, 10), // Current page number
             },
+            pinLength: reporting.pinLength
         };
 
         return res.status(200).json(response);
@@ -1319,7 +1263,8 @@ exports.getBusinessStatistics = async (req, res) => {
           totalAthleteGroups, // Include total athlete groups
           totalAthletes, // Include total number of athletes
           last3Logins, // Include last 3 logins
-          businessName: business.name
+          businessName: business.name,
+          businessId:business.id
         },
       });
     } catch (error) {

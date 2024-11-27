@@ -325,6 +325,10 @@ exports.deleteAthlete = async (req, res) => {
 exports.checkInByPin = async (req, res) => {
   try {
     const { pin, businessId } = req.body; // Get the pin from the request body
+    console.log("businessId", businessId);
+    
+    const business = await model.business.findByPk(businessId)
+    console.log("business is ", business);
 
     // Check if the PIN already exists for any athlete in the same business
     const athleteGroupIds = await model.AthleteGroup.findAll({
@@ -357,6 +361,24 @@ exports.checkInByPin = async (req, res) => {
       checkinDate,
       checkinTime,
     });
+
+    // Send email notification to the athlete
+    const emailOptions = {
+      to: athlete.email, // Assuming the Athlete model has an `email` field
+      subject: "Check-In Successful",
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+          <h2 style="color: #4CAF50;">Check-In Confirmation</h2>
+          <p>Dear ${athlete.name},</p>
+          <p>We are pleased to inform you that your check-in on <strong>${checkinDate}</strong> at <strong>${checkinTime}</strong> was successful.</p>
+          <p>Thank you for visiting us. We hope you have a great experience!</p>
+          <p style="margin-top: 20px;">Best Regards,</p>
+          <p><strong>${business.name}</strong></p>
+        </div>
+      `,
+    };
+
+    await sendEmail(emailOptions);
 
     return res.status(201).json({
       success: true,
@@ -1172,6 +1194,75 @@ exports.bulkUploadAthletes = async (req, res) => {
       success: false,
       message: "An error occurred while processing the athletes.",
       error: error.message,
+    });
+  }
+};
+
+
+exports.checkPin = async (req, res) => {
+  try {
+    const user = req.user;
+    let { pin, userId } = req.query;
+
+    // Use the logged-in user's ID if they're not a superAdmin
+    if (user.role !== "superAdmin") {
+      userId = user.id;
+    }
+
+    // Step 1: Find the business associated with the user ID
+    const business = await model.business.findOne({
+      where: { userId },
+      attributes: ["id"], // Fetch only the business ID
+    });
+
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        message: "Business not found.",
+      });
+    }
+
+    // Step 2: Find AthleteGroup IDs under the business
+    const athleteGroups = await model.AthleteGroup.findAll({
+      where: { businessId: business.id },
+      attributes: ["id"], // Fetch only the AthleteGroup IDs
+    });
+
+    if (!athleteGroups.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No athlete groups found for the business.",
+      });
+    }
+
+    // Extract AthleteGroup IDs
+    const athleteGroupIds = athleteGroups.map((group) => group.id);
+
+    // Step 3: Check if any employee exists with the given pin in the athlete groups
+    const athelete = await model.Athlete.findOne ({
+      where: {
+        athleteGroupId: athleteGroupIds, // Match against the list of AthleteGroup IDs
+        pin,
+      },
+    });
+
+    if (!athelete) {
+      return res.status(200).json({
+        success: true,
+        message: "it is a valid pin",
+      });
+    }
+
+    // If an employee is found
+    return res.status(200).json({
+      success: false,
+      message: "pin already exists for the business.",
+    });
+  } catch (error) {
+    console.error("Error checking pin:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while checking the pin.",
     });
   }
 };
