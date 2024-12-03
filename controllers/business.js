@@ -154,31 +154,41 @@ exports.getOneBusiness = async (req, res) => {
 exports.getAllBusinesses = async (req, res) => {
     try {
         const user = req.user; // Get the authenticated user
-        console.log("user role is ",user.role);
-        
-        // Check if the user is a superAdmin
-        if (user.role === 'superAdmin') {
-            const userId = req.query.userId; // Get the userId from query parameters
+        console.log("user role is ", user.role);
 
-            // If userId is provided, fetch businesses for that specific user
+        const searchQuery = req.query.search || ''; // Get the search query parameter
+        const userId = req.query.userId; // Get the userId from query parameters
+        const page = parseInt(req.query.page) || 1; // Default to page 1
+        const limit = parseInt(req.query.limit) || 6; // Default to 6 items per page
+        const offset = (page - 1) * limit;
+
+        // Define search filter for the name field
+        const nameFilter = searchQuery
+        ? { name: { [Sequelize.Op.like]: `%${searchQuery}%` } } // Matches any part of the name
+        : {};
+    
+        // SuperAdmin logic
+        if (user.role === 'superAdmin') {
             if (userId) {
                 const businesses = await model.business.findAll({
-                    where: { userId: userId }, // Filter businesses by the specified userId
+                    where: { 
+                        ...nameFilter,
+                        userId: userId 
+                    }, // Filter by name and userId
                     include: [
-                      {
-                        model: model.user,
-                        as: 'user', // Use the alias defined in associations
-                        attributes: ['firstName', 'lastName', 'id'],
-                      },
-                      {
-                        model: model.reporting,
-                        as: 'reporting', // Use the alias defined in associations
-                        attributes: ['pinLength']
-                      }
-                    ]
-                  });
-                 console.log("businesses are ",businesses.dataValues);
-                 
+                        {
+                            model: model.user,
+                            as: 'user',
+                            attributes: ['firstName', 'lastName', 'id'],
+                        },
+                        {
+                            model: model.reporting,
+                            as: 'reporting',
+                            attributes: ['pinLength'],
+                        },
+                    ],
+                });
+
                 if (businesses.length === 0) {
                     return res.status(404).json({
                         success: false,
@@ -194,36 +204,33 @@ exports.getAllBusinesses = async (req, res) => {
                     ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                     status: business.status,
                     userId: business.user.id,
-                    pinLength: business.reporting.pinLength
+                    pinLength: business.reporting.pinLength,
                 }));
 
                 return res.status(200).json({
                     success: true,
                     message: 'Businesses for the specified user retrieved successfully.',
-                    data: businessesWithOwnerName
+                    data: businessesWithOwnerName,
                 });
             }
 
             // If no userId is provided, fetch all businesses with pagination
-            const page = parseInt(req.query.page) || 1; // Default to page 1
-            const limit = parseInt(req.query.limit) || 6; // Default to 10 items per page
-            const offset = (page - 1) * limit;
-
             const { count, rows: businesses } = await model.business.findAndCountAll({
-                include: [{
-                    model: model.user,
-                    as: 'user', // Use the alias defined in associations
-                    attributes: ['firstName', 'lastName', 'id'],
-                },
-                {
-                    model: model.reporting,
-                    as: 'reporting', // Use the alias defined in associations
-                    attributes: ['pinLength']
-                  }
-            ],
-                
+                where: nameFilter, // Apply name filter
+                include: [
+                    {
+                        model: model.user,
+                        as: 'user',
+                        attributes: ['firstName', 'lastName', 'id'],
+                    },
+                    {
+                        model: model.reporting,
+                        as: 'reporting',
+                        attributes: ['pinLength'],
+                    },
+                ],
                 offset,
-                limit
+                limit,
             });
 
             if (count === 0) {
@@ -232,9 +239,7 @@ exports.getAllBusinesses = async (req, res) => {
                     message: 'No businesses found.',
                 });
             }
-            businesses.map((business) =>{console.log(business.dataValues.user);
-             })
-            
+
             const businessesWithOwnerName = businesses.map(business => ({
                 id: business.id,
                 name: business.name,
@@ -243,7 +248,7 @@ exports.getAllBusinesses = async (req, res) => {
                 ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                 status: business.status,
                 userId: business.user.id,
-                pinLength: business.reporting.pinLength
+                pinLength: business.reporting.pinLength,
             }));
 
             return res.status(200).json({
@@ -253,28 +258,32 @@ exports.getAllBusinesses = async (req, res) => {
                     totalItems: count,
                     currentPage: page,
                     totalPages: Math.ceil(count / limit),
-                    businesses: businessesWithOwnerName
-                }
+                    businesses: businessesWithOwnerName,
+                },
             });
         }
 
-        // If the user is an admin, fetch only their businesses
+        // Admin logic
         if (user.role === 'admin') {
             const businesses = await model.business.findAll({
-                where: { userId: user.id }, // Only fetch businesses for the admin's ID
-                include: [{
-                    model: model.user,
-                    as: 'user', // Use the alias defined in associations
-                    attributes: ['firstName', 'lastName', 'id'],
-                },{
-                    model: model.reporting,
-                    as: 'reporting', // Use the alias defined in associations
-                    attributes: ['pinLength']
-                }],
-               
+                where: {
+                    ...nameFilter,
+                    userId: user.id,
+                }, // Filter by name and userId
+                include: [
+                    {
+                        model: model.user,
+                        as: 'user',
+                        attributes: ['firstName', 'lastName', 'id'],
+                    },
+                    {
+                        model: model.reporting,
+                        as: 'reporting',
+                        attributes: ['pinLength'],
+                    },
+                ],
             });
-            console.log("businesses are ",businesses);
-            
+
             if (businesses.length === 0) {
                 return res.status(404).json({
                     success: false,
@@ -290,24 +299,29 @@ exports.getAllBusinesses = async (req, res) => {
                 ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                 status: business.status,
                 userId: business.user.id,
-                pinLength: business.reporting.pinLength
+                pinLength: business.reporting.pinLength,
             }));
 
             return res.status(200).json({
                 success: true,
                 message: 'Businesses retrieved successfully for admin.',
-                data: businessesWithOwnerName
+                data: businessesWithOwnerName,
             });
         }
 
-        // For non-superAdmin, non-admin users, return only their businesses
+        // Non-superAdmin, non-admin logic
         const businesses = await model.business.findAll({
-            where: { userId: user.id },
-            include: [{
-                model: model.user,
-                as: 'user', // Use the alias defined in associations
-                attributes: ['firstName', 'lastName', 'id'],
-            }]
+            where: {
+                ...nameFilter,
+                userId: user.id,
+            },
+            include: [
+                {
+                    model: model.user,
+                    as: 'user',
+                    attributes: ['firstName', 'lastName', 'id'],
+                },
+            ],
         });
 
         if (businesses.length === 0) {
@@ -324,15 +338,14 @@ exports.getAllBusinesses = async (req, res) => {
             photoPath: business.photoPath,
             ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
             status: business.status,
-            userId: business.user.id
+            userId: business.user.id,
         }));
 
         return res.status(200).json({
             success: true,
             message: 'Your businesses retrieved successfully.',
-            data: businessesWithOwnerName
+            data: businessesWithOwnerName,
         });
-
     } catch (error) {
         console.error('Error fetching businesses:', error);
         return res.status(500).json({

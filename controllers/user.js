@@ -267,7 +267,7 @@ exports.verifyOtpOnly = async (req, res) => {
     });
 
     if (isValidOtp) {
-      res.json({ success: true, message: "user registered successfully." });
+      res.json({ success: true, message: "otp verified" });
     } else {
       res.json({ success: false, message: "Invalid OTP or OTP expired." });
     }

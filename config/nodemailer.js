@@ -2,10 +2,12 @@ const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const transporter = nodemailer.createTransport({
-    service: "Gmail", // Example using Gmail, update according to your provider
+    host: "smtp.hostinger.com", // SMTP host for your email provider
+    port: 465, // Port for SSL
+    secure: true, // Use true for port 465 (SSL)
     auth: {
-        user: process.env.EMAIL,
-        pass: process.env.PASS
+        user: process.env.EMAIL, // Email address from environment variables
+        pass: process.env.PASS  // Email password from environment variables
     }
 });
 
@@ -13,7 +15,7 @@ const transporter = nodemailer.createTransport({
  * Sends an email.
  * 
  * @param {Object} [mailOptions] - Optional mail options including recipient, subject, and text/HTML.
- * @param {string} [mailOptions.from] - Sender's email address. Defaults to process.env.EMAIL_USER.
+ * @param {string} [mailOptions.from] - Sender's email address. Defaults to process.env.EMAIL.
  * @param {string} [mailOptions.to] - Recipient's email address. Required if mailOptions is provided.
  * @param {string} [mailOptions.subject] - Subject of the email. Required if mailOptions is provided.
  * @param {string} [mailOptions.text] - Plain text body of the email.
