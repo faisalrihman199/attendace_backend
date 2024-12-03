@@ -1002,7 +1002,6 @@ exports.contactUs = async (req, res) => {
 
   // Prepare mail options
   const mailOptions = {
-    from: `${firstName} ${lastName} <${email}>`, // Use the sender's email
     to: contactEmail,
     subject: `New contact message from ${firstName} ${lastName}`,
     html: emailContent,
