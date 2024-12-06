@@ -101,7 +101,7 @@ exports.getUniquePin = async (req, res) => {
 
 exports.createAthlete = async (req, res) => {
   try {
-    const {
+    let {
       name,
       dateOfBirth,
       description,
@@ -193,6 +193,17 @@ exports.createAthlete = async (req, res) => {
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : null, // Save photoPath if uploaded
       });
 
+      if (dateOfBirth) {
+        const parsedDate = new Date(dateOfBirth);
+        if (!isNaN(parsedDate)) {
+            dateOfBirth = parsedDate.toISOString().slice(0, 10);
+        } else {
+            console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
+            dateOfBirth = null; // Set to null if invalid date
+        }
+    } else {
+        dateOfBirth = null; // Set to null if undefined or missing
+    }
       // Fetch QR code image from external API
       const qrCodeResponse = await axios.get(
         `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(
