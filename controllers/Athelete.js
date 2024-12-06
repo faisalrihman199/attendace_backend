@@ -141,7 +141,7 @@ exports.createAthlete = async (req, res) => {
     }).then((groups) => groups.map((group) => group.id));
     console.log("athlet group ids are ", athleteGroupIds, pin);
     // Check if the PIN already exists for any athlete in those groups
-    const athlete = await model.Athlete.findOne({
+    let athlete = await model.Athlete.findOne({
       where: {
         pin,
         athleteGroupId: { [Op.in]: athleteGroupIds },
@@ -983,7 +983,7 @@ async function sendCheckinPdfEmail(user, business) {
 // Main function to handle athlete processing from CSV or Excel file
 exports.bulkUploadAthletes = async (req, res) => {
   try {
-    const file = req.file; // Expecting 'file' to be set up by Multer in your route
+    const file = req.file; // File provided by Multer middleware
     if (!file) {
       return res
         .status(400)
@@ -991,16 +991,10 @@ exports.bulkUploadAthletes = async (req, res) => {
     }
 
     let athletesData = [];
+    const { athleteGroupId } = req.body; // Get athleteGroupId from the request body
 
-    // Get athleteGroupId and category from the request body (if provided)
-    const {
-      athleteGroupId: bodyAthleteGroupId,
-      // category: bodyCategory,
-    } = req.body;
-
-    // Step 1: Parse the file based on its type
+    // Step 1: Parse the file
     if (file.mimetype === "text/csv") {
-      // Parse CSV data
       athletesData = parse(file.buffer.toString(), {
         columns: true,
         skip_empty_lines: true,
@@ -1010,7 +1004,6 @@ exports.bulkUploadAthletes = async (req, res) => {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
       file.mimetype === "application/vnd.ms-excel"
     ) {
-      // Parse Excel data
       const workbook = xlsx.read(file.buffer, { type: "buffer" });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
@@ -1021,22 +1014,27 @@ exports.bulkUploadAthletes = async (req, res) => {
         .json({ success: false, message: "Invalid file type." });
     }
 
-    // Step 2: Fetch business based on the authenticated user
+    // Step 2: Fetch the business
     const user = req.user;
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
     const business = await model.business.findOne({
       where: { userId },
       include: [model.reporting],
     });
+
     if (!business) {
       return res
         .status(404)
         .json({ success: false, message: "Business not found." });
     }
 
-    console.log("business reporting pinLength:", business.reporting.pinLength);
+    const athleteGroupIds = await model.AthleteGroup.findAll({
+      where: { businessId: business.id },
+      attributes: ["id"],
+    }).then((groups) => groups.map((group) => group.id));
 
-    // Step 3: Process each athlete entry
+    // Step 3: Process athletes data
+    const processedAthletes = [];
     for (const row of athletesData) {
       let {
         pin,
@@ -1047,20 +1045,13 @@ exports.bulkUploadAthletes = async (req, res) => {
         athleteGroupName,
         email,
       } = row;
-      console.log("Processing row:", row);
 
-      // Determine athlete group to use
+      // Determine athlete group
       let athleteGroup;
-
-      // If athleteGroupId is provided in the request body, use it
-      if (bodyAthleteGroupId) {
+      if (athleteGroupId) {
         athleteGroup = await model.AthleteGroup.findOne({
-          where: {
-            id: bodyAthleteGroupId,
-            businessId: business.id,
-          },
+          where: { id: athleteGroupId, businessId: business.id },
         });
-
         if (!athleteGroup) {
           return res.status(404).json({
             success: false,
@@ -1068,7 +1059,6 @@ exports.bulkUploadAthletes = async (req, res) => {
           });
         }
       } else {
-        // Otherwise, use athleteGroupClass and athleteGroupName from the file
         athleteGroup = await model.AthleteGroup.findOne({
           where: {
             businessId: business.id,
@@ -1094,25 +1084,17 @@ exports.bulkUploadAthletes = async (req, res) => {
         );
       }
 
-      // Check if the PIN already exists for any athlete in the same business
-      const athleteGroupIds = await model.AthleteGroup.findAll({
-        where: { businessId: business.id },
-        attributes: ["id"],
-      }).then((groups) => groups.map((group) => group.id));
-
-      // Check if the PIN already exists for any athlete in those groups
-      const athlete = await model.Athlete.findOne({
+      // Check for existing athlete
+      const existingAthlete = await model.Athlete.findOne({
         where: {
           pin,
           athleteGroupId: { [Op.in]: athleteGroupIds },
         },
       });
 
-      console.log("Existing athlete is:", athlete);
-
-      if (athlete) {
+      if (existingAthlete) {
         // Update existing athlete
-        await athlete.update({
+        await existingAthlete.update({
           name,
           dateOfBirth,
           description,
@@ -1120,76 +1102,91 @@ exports.bulkUploadAthletes = async (req, res) => {
           athleteGroupId: athleteGroup.id,
         });
       } else {
-        const alternatePin = await generateUniquePinForBusiness(
-          business.reporting.pinLength,
-          business.id
-        );
-
-        // Create a new athlete
+        // Create new athlete
         const newAthlete = await model.Athlete.create({
-          pin: pin || alternatePin,
+          pin,
           name,
           dateOfBirth,
           description,
           email,
           athleteGroupId: athleteGroup.id,
         });
-        // Fetch QR code image from external API
-        const qrCodeResponse = await axios.get(
-          `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(
-            pin
-          )}&size=256x256`,
-          {
-            responseType: "arraybuffer",
-          }
-        );
-
-        // Email content with embedded QR code
-        const finalHtmlContent = `
-        <html>
-            <body style="font-family: Arial, sans-serif; line-height: 1.5; margin: 0; padding: 20px; background-color: #f9f9f9;">
-                <div style="max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);">
-                    <h1 style="color: #333; font-size: 24px; margin-bottom: 10px;">Welcome ${name}!</h1>
-                    <p style="font-size: 16px; color: #555;">We're excited to have you join our athletic program.</p>
-                    <p style="font-size: 16px; color: #555;">Your unique PIN is: <strong style="font-size: 20px;">${pin}</strong></p>
-                    <p style="font-size: 16px; color: #555;">To access your profile, please keep your PIN safe and scan the QR code below:</p>
-                    <div style="text-align: center; margin: 20px 0;">
-                        <img src="cid:qrcodeImage" alt="Embedded QR Code" style="width: 200px; height: 200px; border: 1px solid #ccc;"/>
-                    </div>
-                    <p style="font-size: 16px; color: #555;">If you have any questions, feel free to reach out to us.</p>
-                    <div style="margin-top: 20px; font-size: 14px; color: #777;">
-                        <p>Best regards,<br>${business.name}</p>
-                    </div>
-                </div>
-            </body>
-        </html>
-      `;
-
-        // Send the email
-        const mailOptions = {
-          to: email,
-          subject: "Welcome to Our Athletic Program!",
-          html: finalHtmlContent,
-          attachments: [
-            {
-              filename: "qrcode.png",
-              content: qrCodeResponse.data,
-              contentType: "image/png",
-              cid: "qrcodeImage", // same as the cid in the HTML img tag
-            },
-          ],
-        };
-
-        await sendEmail(mailOptions);
+        processedAthletes.push({ pin, name, email });
       }
     }
 
-    return res.status(200).json({
+    // Send immediate response
+    res.status(200).json({
       success: true,
       message: "Athletes uploaded and processed successfully.",
+      data: processedAthletes,
     });
+
+    // Step 4: Send emails in batches
+    const batchSize = 10; // Number of emails to send per batch
+    const delayBetweenBatches = 30 * 60 * 1000; // 30 minutes in milliseconds
+
+    const sendEmailBatch = async (batch) => {
+      try {
+        for (const { pin, name, email } of batch) {
+          if (!email) continue; // Skip if no email
+
+          // Fetch QR code
+          const qrCodeResponse = await axios.get(
+            `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(
+              pin
+            )}&size=256x256`,
+            { responseType: "arraybuffer" }
+          );
+
+          // Prepare email content
+          const finalHtmlContent = `
+            <html>
+              <body style="font-family: Arial, sans-serif; line-height: 1.5;">
+                <h1>Welcome ${name}!</h1>
+                <p>Your unique PIN is: <strong>${pin}</strong></p>
+                <p>Scan the QR code below to access your profile:</p>
+                <img src="cid:qrcodeImage" alt="QR Code" style="width: 200px; height: 200px;"/>
+              </body>
+            </html>
+          `;
+
+          const mailOptions = {
+            to: email,
+            subject: "Welcome to Our Athletic Program!",
+            html: finalHtmlContent,
+            attachments: [
+              {
+                filename: "qrcode.png",
+                content: qrCodeResponse.data,
+                contentType: "image/png",
+                cid: "qrcodeImage",
+              },
+            ],
+          };
+
+          // Send email
+          await sendEmail(mailOptions);
+        }
+      } catch (err) {
+        console.error("Error sending batch emails:", err);
+      }
+    };
+
+    const batches = [];
+    for (let i = 0; i < processedAthletes.length; i += batchSize) {
+      batches.push(processedAthletes.slice(i, i + batchSize));
+    }
+
+    for (const batch of batches) {
+      await sendEmailBatch(batch);
+      console.log(`Waiting for ${delayBetweenBatches / 60000} minutes before the next batch.`);
+      await new Promise((resolve) => setTimeout(resolve, delayBetweenBatches));
+    }
+
+    console.log("All emails have been sent.");
   } catch (error) {
-    console.error("Error processing file upload:", error);
+    console.error("Error processing athletes upload:", error);
     return res.status(500).json({
       success: false,
       message: "An error occurred while processing the athletes.",
@@ -1197,7 +1194,6 @@ exports.bulkUploadAthletes = async (req, res) => {
     });
   }
 };
-
 
 exports.checkPin = async (req, res) => {
   try {

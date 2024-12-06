@@ -50,7 +50,7 @@ function getRandomNumber() {
                 },
                 { where: { id }, transaction }
             );
-
+            
             await transaction.commit();
             return res.status(200).json({ message: "User updated successfully." });
         } else {
@@ -96,7 +96,7 @@ function getRandomNumber() {
                 },
                 { transaction }
             );
-
+            
             await transaction.commit();
             return res.status(201).json({
                 success: true,
@@ -470,7 +470,8 @@ exports.createBusiness = async (req, res) => {
         const photoPath = req.file ? `business/${req.file.filename}` : null; // New photo path if uploaded
         const pin = pinLength ? pinLength : getRandomNumber();
 
-        const userData = await model.user.findByPk(userId);
+        const userData = await model.user.findOne({id:userId});
+        console.log("user data is ",userData,userId)
 
         // Check if the user already has a soft-deleted business
         let business = await model.business.findOne({
@@ -534,6 +535,13 @@ exports.createBusiness = async (req, res) => {
             photoPath,
             userId: userId,
         });
+
+        await model.AthleteGroup.create({
+            groupName: `Default - ${newBusiness.name}`,
+            category: "team",
+            businessId: newBusiness.id,
+            
+        })
 
         const reporting = await model.reporting.create({
             email: userData.email,
@@ -696,40 +704,60 @@ exports.deleteAthleteGroup = async (req, res) => {
         const user = req.user; // Authenticated user
         const { id } = req.params; // Get athlete group ID from request parameters
 
-        
-
         // Find the athlete group by ID
         const athleteGroup = await model.AthleteGroup.findOne({
             where: { id },
-            include: [{
-                model: model.business,
-                attributes: ['userId'] // Get userId from the associated business
-            }]
+            include: [
+                {
+                    model: model.business,
+                    attributes: ["id", "userId", "name"], // Include the business and its ID/userId
+                },
+            ],
         });
 
         // Check if the athlete group exists
         if (!athleteGroup) {
             return res.status(404).json({
                 success: false,
-                message: "Athlete group not found."
+                message: "Athlete group not found.",
             });
         }
 
-        console.log(athleteGroup.business.userId)
-        // Check if the athlete group's business belongs to the authenticated user
-        if (athleteGroup.business.userId !== user.id && req.user.role !="superAdmin") {
+        // Check if the authenticated user has permission to delete this athlete group
+        if (athleteGroup.business.userId !== user.id && req.user.role !== "superAdmin") {
             return res.status(403).json({
                 success: false,
-                message: "You are not authorized to delete this athlete group."
+                message: "You are not authorized to delete this athlete group.",
             });
         }
 
-        // Delete the athlete group (soft delete if paranoid is true)
+        // Find the default athlete group for the business
+        const defaultAthleteGroup = await model.AthleteGroup.findOne({
+            where: {
+                businessId: athleteGroup.business.id,
+                groupName: `Default - ${athleteGroup.business.name}`, // Assuming this naming convention for default groups
+            },
+        });
+
+        if (!defaultAthleteGroup) {
+            return res.status(404).json({
+                success: false,
+                message: "Default athlete group not found. Cannot reassign athletes.",
+            });
+        }
+
+        // Reassign all athletes from the deleted group to the default group
+        await model.Athlete.update(
+            { athleteGroupId: defaultAthleteGroup.id },
+            { where: { athleteGroupId: id } }
+        );
+
+        // Delete the athlete group
         await athleteGroup.destroy();
 
         return res.status(200).json({
             success: true,
-            message: "Athlete group deleted successfully."
+            message: "Athlete group deleted successfully. Athletes moved to the default group.",
         });
     } catch (error) {
         console.error("Error deleting athlete group:", error);
@@ -740,6 +768,7 @@ exports.deleteAthleteGroup = async (req, res) => {
         });
     }
 };
+
 
 
 exports.setBusinessStatusInactive = async (req, res) => {
@@ -979,7 +1008,7 @@ exports.getAllAthleteGroups = async (req, res) => {
         }
 
         // Build the where clause for the query
-        const whereClause = { businessId: business.id };
+        const whereClause = { businessId: business.id,groupName: { [Op.notLike]: 'Default -%' }, };
 
         // Add name filtering if the name is provided
         if (name) {

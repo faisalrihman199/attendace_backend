@@ -25,3 +25,4 @@ router.delete("/cancelSubscription",authmiddleware.authenticate("jwt",{session:f
 router.put("/updateCard",authmiddleware.authenticate("jwt",{session:false}),controllers.user.updateCardInfo)
 
 module.exports = router;
+

@@ -13,7 +13,7 @@ const Athlete = sequelize.define('Athlete', {
     },
     dateOfBirth: {
         type: DataTypes.DATE,
-        allowNull: false,
+        allowNull: true,
     },
     description: {
         type: DataTypes.TEXT,
@@ -21,7 +21,7 @@ const Athlete = sequelize.define('Athlete', {
     },
     email:{
         type:DataTypes.STRING,
-        allownull:false,
+        allownull:true,
         
     },
     active: {
