@@ -1039,13 +1039,23 @@ exports.bulkUploadAthletes = async (req, res) => {
       let {
         pin,
         name,
-        description = "",
+        description,
         dateOfBirth,
         athleteGroupClass,
         athleteGroupName,
         email,
       } = row;
-
+      if (dateOfBirth) {
+        const parsedDate = new Date(dateOfBirth);
+        if (!isNaN(parsedDate)) {
+            dateOfBirth = parsedDate.toISOString().slice(0, 10);
+        } else {
+            console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
+            dateOfBirth = null; // Set to null if invalid date
+        }
+    } else {
+        dateOfBirth = null; // Set to null if undefined or missing
+    }
       // Determine athlete group
       let athleteGroup;
       if (athleteGroupId) {
