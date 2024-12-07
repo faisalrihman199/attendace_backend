@@ -203,6 +203,7 @@ exports.getAllBusinesses = async (req, res) => {
                     photoPath: business.photoPath,
                     ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                     status: business.status,
+                    timezone: business.timezone,
                     userId: business.user.id,
                     pinLength: business.reporting.pinLength,
                 }));
@@ -463,8 +464,10 @@ exports.addAthleteGroup = async (req, res) => {
 
 exports.createBusiness = async (req, res) => {
     try {
+        console.log("req is ",req.body);
+        
         const user = req.user;
-        const { name, message } = req.body;
+        const { name, message,timezone } = req.body;
         const { pinLength } = req.body;
         const userId = user.role === "superAdmin" ? req.query.userId : user.id; // Use userId from query if superAdmin
         const photoPath = req.file ? `business/${req.file.filename}` : null; // New photo path if uploaded
@@ -499,6 +502,7 @@ exports.createBusiness = async (req, res) => {
             // Update restored business details (exclude email)
             business.name = name || business.name;
             business.message = message || business.message;
+            business.timezone = timezone || business.timezone;
             business.photoPath = photoPath || business.photoPath;
 
             await business.save();

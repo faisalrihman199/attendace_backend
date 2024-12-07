@@ -1172,14 +1172,18 @@ exports.updateUser = async (req, res) => {
     let user = req.user; // Authenticated user
     let userId = user.role === "superAdmin" ? req.query.userId : user.id; // Determine the userId
     if (req.user.role === "superAdmin" && !req.query.userId) {
+      
       userId = req.user.id;
     }
-
+    
+    
+    
     const { firstName, lastName, email, oldPassword, newPassword } = req.body; // Fields to update
 
     // Find the user to update
     const foundUser = await model.user.findOne({ where: { id: userId } });
-
+    console.log("found user is ", foundUser);
+    
     // If the user does not exist, return 404
     if (!foundUser) {
       return res.status(404).json({
@@ -1188,7 +1192,9 @@ exports.updateUser = async (req, res) => {
       });
     }
     const existingEmail = await model.user.findOne({ where: { email } });
-    if (existingEmail && existingEmail.id !== userId) {
+    console.log("existing email is ", existingEmail);
+    
+    if (existingEmail && existingEmail.id.toString() !== userId.toString()) {
       return res.status(400).json({
         success: false,
         message: "Email already exists.",

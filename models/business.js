@@ -19,7 +19,12 @@ const Business = sequelize.define('business', {
         type: DataTypes.STRING,
         allowNull: false,
         defaultValue: 'active' // Set default value
-    }
+    },
+    timezone: {
+        type: DataTypes.STRING,
+        allowNull: true, // Set to false if the timezone is required
+        defaultValue: 'UTC', // Optional default value
+    },
 }, 
 {
     

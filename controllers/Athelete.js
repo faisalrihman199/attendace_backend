@@ -12,6 +12,7 @@ const { Op, INTEGER } = require("sequelize");
 const PDFDocument = require("pdfkit");
 const cron = require("node-cron");
 const moment = require("moment");
+const mmt = require("moment-timezone");
 
 const { parse } = require("csv-parse"); // For parsing CSV files
 const xlsx = require("xlsx"); // For parsing Excel files
@@ -333,20 +334,33 @@ exports.deleteAthlete = async (req, res) => {
   }
 };
 
+ 
+
 exports.checkInByPin = async (req, res) => {
   try {
     const { pin, businessId } = req.body; // Get the pin from the request body
     console.log("businessId", businessId);
-    
-    const business = await model.business.findByPk(businessId)
+
+    // Fetch the business details, including the timezone
+    const business = await model.business.findByPk(businessId);
     console.log("business is ", business);
+
+    if (!business) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Business not found." });
+    }
+
+    const businessTimezone = business.timezone || "UTC"; // Default to UTC if no timezone is set
+    console.log("Business timezone: ", businessTimezone);
 
     // Check if the PIN already exists for any athlete in the same business
     const athleteGroupIds = await model.AthleteGroup.findAll({
       where: { businessId },
       attributes: ["id"],
     }).then((groups) => groups.map((group) => group.id));
-    console.log("athlet group ids are ", athleteGroupIds, pin);
+    console.log("athlete group ids are ", athleteGroupIds, pin);
+
     // Check if the PIN already exists for any athlete in those groups
     const athlete = await model.Athlete.findOne({
       where: {
@@ -361,10 +375,12 @@ exports.checkInByPin = async (req, res) => {
         .json({ success: false, message: "Athlete not found." });
     }
 
-    // Get the current date and time
-    const currentDate = new Date();
-    const checkinDate = currentDate.toISOString().split("T")[0]; // Format as YYYY-MM-DD
-    const checkinTime = currentDate.toTimeString().split(" ")[0]; // Format as HH:MM:SS
+    // Get the current date and time in the business's timezone
+    const currentDate = mmt().tz(businessTimezone);
+    const checkinDate = currentDate.format("YYYY-MM-DD"); // Format as YYYY-MM-DD
+    const checkinTime = currentDate.format("HH:mm:ss"); // Format as HH:MM:SS
+
+    console.log("Check-in date and time: ", checkinDate, checkinTime);
 
     // Create a new check-in record
     const checkIn = await model.checkin.create({
@@ -374,22 +390,23 @@ exports.checkInByPin = async (req, res) => {
     });
 
     // Send email notification to the athlete
-    const emailOptions = {
-      to: athlete.email, // Assuming the Athlete model has an `email` field
-      subject: "Check-In Successful",
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-          <h2 style="color: #4CAF50;">Check-In Confirmation</h2>
-          <p>Dear ${athlete.name},</p>
-          <p>We are pleased to inform you that your check-in on <strong>${checkinDate}</strong> at <strong>${checkinTime}</strong> was successful.</p>
-          <p>Thank you for visiting us. We hope you have a great experience!</p>
-          <p style="margin-top: 20px;">Best Regards,</p>
-          <p><strong>${business.name}</strong></p>
-        </div>
-      `,
-    };
-
-    await sendEmail(emailOptions);
+    if (athlete.email) {
+      const emailOptions = {
+        to: athlete.email, // Assuming the Athlete model has an `email` field
+        subject: "Check-In Successful",
+        html: `
+          <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+            <h2 style="color: #4CAF50;">Check-In Confirmation</h2>
+            <p>Dear ${athlete.name},</p>
+            <p>We are pleased to inform you that your check-in on <strong>${checkinDate}</strong> at <strong>${checkinTime}</strong> was successful.</p>
+            <p>Thank you for visiting us. We hope you have a great experience!</p>
+            <p style="margin-top: 20px;">Best Regards,</p>
+            <p><strong>${business.name}</strong></p>
+          </div>
+        `,
+      };
+      await sendEmail(emailOptions);
+    }
 
     return res.status(201).json({
       success: true,
@@ -411,6 +428,7 @@ exports.checkInByPin = async (req, res) => {
     });
   }
 };
+
 
 exports.getAllAthletes = async (req, res) => {
   try {
