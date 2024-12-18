@@ -8,6 +8,7 @@ const Sequelize = require("sequelize")
 const sequelize  = require("../config/db");
 const { Op } = require("sequelize");
 const { log } = require("console");
+const { sendEmail } = require("../config/nodemailer");
 
 require('dotenv').config();
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
@@ -15,103 +16,144 @@ function getRandomNumber() {
     return Math.floor(Math.random() * 5) + 3;
   }
 
+  const sendEmailToSuperAdmins = async (subject, htmlContent) => {
+    try {
+      // Get all users with the role 'superAdmin'
+      const superAdmins = await model.user.findAll({
+        where: { role: 'superAdmin' },
+        attributes: ['email'], // Only retrieve email addresses
+      });
+  
+      console.log("superAdmins:", superAdmins); // Debugging: log the super admins list
+  
+      if (superAdmins.length === 0) {
+        console.log("No superAdmins found. Skipping email sending.");
+        return; // If no superAdmins are found, exit early
+      }
+  
+      // Send email to each superAdmin asynchronously
+      for (const admin of superAdmins) {
+        const emailOptions = {
+          to: admin.email,
+          subject: subject,
+          html: htmlContent,
+        };
+  
+        console.log("Sending email to:", admin.email); // Debugging: log the email being sent
+        await sendEmail(emailOptions); // Assuming sendEmail is a helper function for sending emails
+      }
+    } catch (error) {
+      console.error("Error sending email to superAdmins:", error);
+    }
+  };
+  
   exports.addBusiness = async (req, res) => {
     const transaction = await sequelize.transaction(); // Start a transaction
     try {
-        const user = req.user;
-        const { firstName, lastName, email, password } = req.body;
-        const { id } = req.query; // Get the ID from the request parameters
-
-        // Check if the email already exists, including soft-deleted users
-        const existingUser = await model.user.findOne({
-            where: { email },
-            paranoid: false, // Include soft-deleted records
-        });
-
-        if (id) {
-            // If ID is present, update the user
-            const userToUpdate = await model.user.findByPk(id);
-
-            if (!userToUpdate) {
-                return res.status(404).json({ message: "User not found." });
-            }
-
-            // Hash the new password if provided
-            const hashedPassword = password
-                ? await bcrypt.hash(password, 10)
-                : userToUpdate.password;
-
-            // Update user data, but do not change the role
-            await model.user.update(
-                {
-                    firstName,
-                    lastName,
-                    password: hashedPassword,
-                },
-                { where: { id }, transaction }
-            );
-            
-            await transaction.commit();
-            return res.status(200).json({ message: "User updated successfully." });
-        } else {
-            // If ID is not present, handle email logic
-            if (existingUser) {
-                if (existingUser.deletedAt) {
-                    // Restore the soft-deleted user
-                    await existingUser.restore({ transaction });
-
-                    // Update the restored user's details
-                    await existingUser.update(
-                        {
-                            firstName,
-                            lastName,
-                            password: await bcrypt.hash(password, 10),
-                        },
-                        { transaction }
-                    );
-
-                    await transaction.commit();
-                    return res.status(200).json({
-                        success: true,
-                        message: "User restored and updated successfully.",
-                    });
-                } else {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Email already exists and is active.",
-                    });
-                }
-            }
-
-            // If no user exists, create a new one
-            const hashedPassword = await bcrypt.hash(password, 10);
-
-            const newUser = await model.user.create(
-                {
-                    firstName,
-                    lastName,
-                    email,
-                    password: hashedPassword,
-                    role: "admin", // Set role to admin as specified
-                },
-                { transaction }
-            );
-            
-            await transaction.commit();
-            return res.status(201).json({
-                success: true,
-                message: "User created successfully.",
-                newUser,
-            });
+      const { firstName, lastName, email, password } = req.body;
+      const { id } = req.query; // Get the ID from the request parameters
+  
+      // Check if the email already exists, including soft-deleted users
+      const existingUser = await model.user.findOne({
+        where: { email },
+        paranoid: false, // Include soft-deleted records
+      });
+  
+      if (id) {
+        // If ID is present, update the user
+        const userToUpdate = await model.user.findByPk(id);
+  
+        if (!userToUpdate) {
+          return res.status(404).json({ message: "User not found." });
         }
+  
+        // Hash the new password if provided
+        const hashedPassword = password
+          ? await bcrypt.hash(password, 10)
+          : userToUpdate.password;
+  
+        // Update user data, but do not change the role
+        await model.user.update(
+          {
+            firstName,
+            lastName,
+            password: hashedPassword,
+          },
+          { where: { id }, transaction }
+        );
+  
+        await transaction.commit();
+  
+        return res.status(200).json({ message: "User updated successfully." });
+      } else {
+        // If ID is not present, handle email logic
+        if (existingUser) {
+          if (existingUser.deletedAt) {
+            // Restore the soft-deleted user
+            await existingUser.restore({ transaction });
+  
+            // Update the restored user's details
+            await existingUser.update(
+              {
+                firstName,
+                lastName,
+                password: await bcrypt.hash(password, 10),
+              },
+              { transaction }
+            );
+  
+            await transaction.commit();
+  
+            return res.status(200).json({
+              success: true,
+              message: "User restored and updated successfully.",
+            });
+          } else {
+            return res.status(400).json({
+              success: false,
+              message: "Email already exists and is active.",
+            });
+          }
+        }
+  
+        // If no user exists, create a new one
+        const hashedPassword = await bcrypt.hash(password, 10);
+  
+        const newUser = await model.user.create(
+          {
+            firstName,
+            lastName,
+            email,
+            password: hashedPassword,
+            role: "admin", // Set role to admin as specified
+          },
+          { transaction }
+        );
+  
+        await transaction.commit();
+  
+        // Send email to superAdmins after the response
+        const subject = "New User Created";
+        const htmlContent = `<p>A new user with email ${email} has been created successfully.</p>`;
+  
+        // Ensure the email sending function is executed after user creation
+        console.log("Sending email to super admins");
+        await sendEmailToSuperAdmins(subject, htmlContent);
+  
+        return res.status(201).json({
+          success: true,
+          message: "User created successfully.",
+          newUser,
+        });
+      }
     } catch (error) {
-        // Rollback the transaction in case of error
-        if (transaction) await transaction.rollback();
-        console.error("Error adding or updating user:", error);
-        return res.status(500).json({ success: false, message: "An error occurred.", error });
+      // Rollback the transaction in case of error
+      if (transaction) await transaction.rollback();
+      console.error("Error adding or updating user:", error);
+      return res.status(500).json({ success: false, message: "An error occurred.", error });
     }
-};
-
+  };
+  
 
 exports.getOneBusiness = async (req, res) => {
     try {
@@ -248,6 +290,7 @@ exports.getAllBusinesses = async (req, res) => {
                 photoPath: business.photoPath,
                 ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                 status: business.status,
+                timezone: business.timezone,
                 userId: business.user.id,
                 pinLength: business.reporting.pinLength,
             }));
@@ -299,6 +342,7 @@ exports.getAllBusinesses = async (req, res) => {
                 photoPath: business.photoPath,
                 ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                 status: business.status,
+                timezone: business.timezone,
                 userId: business.user.id,
                 pinLength: business.reporting.pinLength,
             }));
@@ -464,17 +508,17 @@ exports.addAthleteGroup = async (req, res) => {
 
 exports.createBusiness = async (req, res) => {
     try {
-        console.log("req is ",req.body);
-        
+        console.log("req is ", req.body);
+
         const user = req.user;
-        const { name, message,timezone } = req.body;
+        const { name, message, timezone } = req.body;
         const { pinLength } = req.body;
         const userId = user.role === "superAdmin" ? req.query.userId : user.id; // Use userId from query if superAdmin
         const photoPath = req.file ? `business/${req.file.filename}` : null; // New photo path if uploaded
         const pin = pinLength ? pinLength : getRandomNumber();
 
-        const userData = await model.user.findOne({id:userId});
-        console.log("user data is ",userData,userId)
+        const userData = await model.user.findOne({ id: userId });
+        console.log("user data is ", userData, userId);
 
         // Check if the user already has a soft-deleted business
         let business = await model.business.findOne({
@@ -524,9 +568,14 @@ exports.createBusiness = async (req, res) => {
                 await setting.save();
             }
 
+            // Send email to superAdmins after updating business
+            const subject = `Business Updated: ${business.name}`;
+            const htmlContent = `<p>The business "${business.name}" has been updated successfully. Message: ${business.message}</p>`;
+            await sendEmailToSuperAdmins(subject, htmlContent);
+
             return res.status(200).json({
                 success: true,
-                message: "business updated successfully",
+                message: "Business updated successfully",
                 data: business,
                 reporting: setting,
             });
@@ -544,14 +593,18 @@ exports.createBusiness = async (req, res) => {
             groupName: `Default - ${newBusiness.name}`,
             category: "team",
             businessId: newBusiness.id,
-            
-        })
+        });
 
         const reporting = await model.reporting.create({
             email: userData.email,
             businessId: newBusiness.id,
             pinLength: pin,
         });
+
+        // Send email to superAdmins after creating the new business
+        const subject = `New Business Created: ${newBusiness.name}`;
+        const htmlContent = `<p>A new business named "${newBusiness.name}" has been created successfully. Message: ${newBusiness.message}</p>`;
+        await sendEmailToSuperAdmins(subject, htmlContent);
 
         return res.status(201).json({
             success: true,

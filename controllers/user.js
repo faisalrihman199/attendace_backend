@@ -1512,3 +1512,75 @@ exports.changeSubscription = async (req, res) => {
       .json({ error: "An error occurred while changing the subscription." });
   }
 };
+
+
+exports.createEmailTemplate = async (req, res) => {
+  try {
+    const { name, subject, htmlContent } = req.body;
+
+    // Ensure the business exists
+    const user = req.user;
+
+    // Create a new email template
+    const emailTemplate = await model.emailTemplate.create({
+      userId: user.id,
+      name,
+      subject,
+      htmlContent,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Email template created successfully.',
+      data: emailTemplate,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Error creating email template.' });
+  }
+};
+
+exports.sendBusinessEmail = async (req, res) => {
+  try {
+    const { recipientEmail, recipientName, templateName } = req.body;
+
+    // Validate request data
+    if (!recipientEmail || !recipientName || !templateName) {
+      return res.status(400).json({ success: false, message: 'Missing required fields.' });
+    }
+
+    let user = req.user;
+
+    // Fetch the email template from the database
+    const template = await model.emailTemplate.findOne({
+      where: { userId: user.id, name: templateName },
+    });
+
+    if (!template) {
+      return res.status(404).json({ success: false, message: 'Email template not found.' });
+    }
+
+    // Replace placeholders in the HTML content with dynamic values
+    const htmlContent = template.htmlContent.replace('{{recipientName}}', recipientName);
+
+    // Prepare email options
+    const mailOptions = {
+      to: recipientEmail,
+      subject: template.subject,
+      html: htmlContent,
+    };
+
+    // Send the email
+    const emailResult = await sendEmail(mailOptions);
+
+    // Respond to the client
+    res.status(200).json({
+      success: true,
+      message: 'Email sent successfully.',
+      data: { messageId: emailResult.messageId },
+    });
+  } catch (error) {
+    console.error('Error sending email:', error);
+    res.status(500).json({ success: false, message: 'Failed to send email.' });
+  }
+};

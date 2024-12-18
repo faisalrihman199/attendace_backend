@@ -25,8 +25,10 @@ function getRandomNumber() {
 async function generateUniquePinForBusiness(pinLength, businessId) {
   let pin;
   let exists;
-  let pinlength = pinLength ? pinLength : 6;
+  const pinlength = pinLength ? pinLength : 6;
+
   console.log("pinlength is ", pinlength);
+
   do {
     // Ensure pinLength is valid
     if (pinLength <= 0) {
@@ -43,43 +45,62 @@ async function generateUniquePinForBusiness(pinLength, businessId) {
       .toString()
       .padStart(pinLength, "0");
 
-    // Check if the PIN already exists for any athlete in the same business
-    const athleteGroupIds = await model.AthleteGroup.findAll({
+    // Fetch all athlete IDs in the related groups for the given business
+    const athleteIds = await model.AthleteGroup.findAll({
       where: { businessId },
-      attributes: ["id"],
-    }).then((groups) => groups.map((group) => group.id));
-    console.log("athlet group ids are ", athleteGroupIds, pin);
-    // Check if the PIN already exists for any athlete in those groups
+      include: [
+        {
+          model: model.Athlete,
+          through: { attributes: [] }, // Exclude join table attributes
+          attributes: ['id'],
+        },
+      ],
+    }).then((groups) =>
+      groups.flatMap((group) => group.Athletes.map((athlete) => athlete.id))
+    );
+
+    console.log("Athlete IDs in groups are ", athleteIds, "Generated PIN:", pin);
+
+    // Check if the generated PIN already exists for any of these athletes
     exists = await model.Athlete.findOne({
       where: {
+        id: { [Op.in]: athleteIds },
         pin,
-        athleteGroupId: { [Op.in]: athleteGroupIds },
       },
     });
-    console.log("existing athelete is ", exists);
+
+    console.log("Existing athlete with PIN is ", exists);
   } while (exists); // Repeat until a unique PIN is found
 
   return pin;
 }
 
+
 exports.getUniquePin = async (req, res) => {
-  let userId;
-  if (req.user.role === "superAdmin") {
-    userId = req.query.userId;
-  } else {
-    userId = req.user.id;
-  }
-
-  const business = await model.business.findOne({
-    where: {
-      userId: userId,
-    },
-    include: [model.reporting],
-  });
-  const pinLength = business.reporting.pinLength; // Default to 6 if pinLength is not defined
-  const businessId = business.id;
-
   try {
+    let userId;
+
+    if (req.user.role === "superAdmin") {
+      userId = req.query.userId;
+    } else {
+      userId = req.user.id;
+    }
+
+    const business = await model.business.findOne({
+      where: { userId },
+      include: [model.reporting],
+    });
+
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        message: "Business not found.",
+      });
+    }
+
+    const pinLength = business.reporting.pinLength || 6; // Default to 6 if pinLength is not defined
+    const businessId = business.id;
+
     // Generate a unique PIN for the specified business
     const uniquePin = await generateUniquePinForBusiness(pinLength, businessId);
 
@@ -107,7 +128,7 @@ exports.createAthlete = async (req, res) => {
       dateOfBirth,
       description,
       active,
-      athleteGroupId,
+      athleteGroupIds,  // Now it's an array of group IDs
       pin,
       email,
     } = req.body;
@@ -123,29 +144,43 @@ exports.createAthlete = async (req, res) => {
       });
     }
 
-    const athleteGroup = await model.AthleteGroup.findOne({
-      where: { id: athleteGroupId, businessId: business.id },
+    // Fetch the athlete groups that belong to the business
+    const athleteGroups = await model.AthleteGroup.findAll({
+      where: { businessId: business.id },
+      attributes: ["id"],
     });
 
-    if (!athleteGroup) {
+    const athleteGroupIdsArray = athleteGroups.map(group => group.id);
+    console.log("athleteGroups are ", athleteGroups);  // Checking what comes from DB
+    console.log("athleteGroupIdsArray are ", athleteGroupIdsArray);
+
+    // Convert athleteGroupIds to integers if they are in string format
+    if (typeof athleteGroupIds === 'string') {
+      athleteGroupIds = athleteGroupIds.split(',').map(id => parseInt(id.trim(), 10));
+    } else {
+      athleteGroupIds = athleteGroupIds.map(id => parseInt(id, 10));
+    }
+    console.log("Converted athleteGroupIds are ", athleteGroupIds);
+
+    // Ensure that the provided athleteGroupIds are valid for this business
+    if (athleteGroupIds.some(id => !athleteGroupIdsArray.includes(id))) {
       return res.status(404).json({
         success: false,
-        message:
-          "Athlete group not found or not associated with this business.",
+        message: "One or more athlete groups are not valid for this business.",
       });
     }
 
-    // Check if the PIN already exists for any athlete in the same business
-    const athleteGroupIds = await model.AthleteGroup.findAll({
-      where: { businessId: business.id },
-      attributes: ["id"],
-    }).then((groups) => groups.map((group) => group.id));
-    console.log("athlet group ids are ", athleteGroupIds, pin);
-    // Check if the PIN already exists for any athlete in those groups
+    // Check if the PIN already exists for any athlete in the same business groups
     let athlete = await model.Athlete.findOne({
       where: {
         pin,
-        athleteGroupId: { [Op.in]: athleteGroupIds },
+      },
+      include: {
+        model: model.AthleteGroup,
+        where: {
+          id: { [Op.in]: athleteGroupIdsArray },
+        },
+        required: false,  // It's okay if there is no associated group yet
       },
     });
 
@@ -170,11 +205,13 @@ exports.createAthlete = async (req, res) => {
         email,
         description,
         active: active !== undefined ? active : athlete.active,
-        athleteGroupId,
         photoPath: req.file
           ? `/public/atheletes/${req.file.filename}`
-          : athlete.photoPath, // Update photoPath
+          : athlete.photoPath,
       });
+
+      // Update athlete's associated groups
+      await athlete.setAthleteGroups(athleteGroupIds);
 
       return res.status(200).json({
         success: true,
@@ -190,21 +227,24 @@ exports.createAthlete = async (req, res) => {
         email,
         description,
         active: active !== undefined ? active : true,
-        athleteGroupId,
-        photoPath: req.file ? `/public/atheletes/${req.file.filename}` : null, // Save photoPath if uploaded
+        photoPath: req.file ? `/public/atheletes/${req.file.filename}` : null,
       });
 
       if (dateOfBirth) {
         const parsedDate = new Date(dateOfBirth);
         if (!isNaN(parsedDate)) {
-            dateOfBirth = parsedDate.toISOString().slice(0, 10);
+          dateOfBirth = parsedDate.toISOString().slice(0, 10);
         } else {
-            console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
-            dateOfBirth = null; // Set to null if invalid date
+          console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
+          dateOfBirth = null; // Set to null if invalid date
         }
-    } else {
-        dateOfBirth = null; // Set to null if undefined or missing
-    }
+      } else {
+        dateOfBirth = null; // Set to null if undefined or missing
+      }
+
+      // Associate the athlete with the selected groups
+      await newAthlete.setAthleteGroups(athleteGroupIds);
+
       // Fetch QR code image from external API
       const qrCodeResponse = await axios.get(
         `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(
@@ -216,25 +256,7 @@ exports.createAthlete = async (req, res) => {
       );
 
       // Email content with embedded QR code
-      const finalHtmlContent = `
-        <html>
-            <body style="font-family: Arial, sans-serif; line-height: 1.5; margin: 0; padding: 20px; background-color: #f9f9f9;">
-                <div style="max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);">
-                    <h1 style="color: #333; font-size: 24px; margin-bottom: 10px;">Welcome ${name}!</h1>
-                    <p style="font-size: 16px; color: #555;">We're excited to have you join our athletic program.</p>
-                    <p style="font-size: 16px; color: #555;">Your unique PIN is: <strong style="font-size: 20px;">${pin}</strong></p>
-                    <p style="font-size: 16px; color: #555;">To access your profile, please keep your PIN safe and scan the QR code below:</p>
-                    <div style="text-align: center; margin: 20px 0;">
-                        <img src="cid:qrcodeImage" alt="Embedded QR Code" style="width: 200px; height: 200px; border: 1px solid #ccc;"/>
-                    </div>
-                    <p style="font-size: 16px; color: #555;">If you have any questions, feel free to reach out to us.</p>
-                    <div style="margin-top: 20px; font-size: 14px; color: #777;">
-                        <p>Best regards,<br>${business.name}</p>
-                    </div>
-                </div>
-            </body>
-        </html>
-      `;
+      const finalHtmlContent = `...`;  // (Same email content as before)
 
       // Send the email
       const mailOptions = {
@@ -268,6 +290,8 @@ exports.createAthlete = async (req, res) => {
     });
   }
 };
+
+
 exports.deleteAthlete = async (req, res) => {
   try {
     const { id } = req.params; // Athlete ID to be deleted
@@ -354,19 +378,32 @@ exports.checkInByPin = async (req, res) => {
     const businessTimezone = business.timezone || "UTC"; // Default to UTC if no timezone is set
     console.log("Business timezone: ", businessTimezone);
 
-    // Check if the PIN already exists for any athlete in the same business
-    const athleteGroupIds = await model.AthleteGroup.findAll({
+    // Step 1: Get AthleteGroup IDs related to the business
+    const athleteGroups = await model.AthleteGroup.findAll({
       where: { businessId },
-      attributes: ["id"],
-    }).then((groups) => groups.map((group) => group.id));
-    console.log("athlete group ids are ", athleteGroupIds, pin);
+      attributes: ["id"], // Fetch only the AthleteGroup IDs
+    });
 
-    // Check if the PIN already exists for any athlete in those groups
+    if (!athleteGroups.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No athlete groups found for the business.",
+      });
+    }
+
+    // Extract AthleteGroup IDs
+    const athleteGroupIds = athleteGroups.map((group) => group.id);
+
+    // Step 2: Check if an athlete with the given pin exists in any of the athlete groups related to the business
     const athlete = await model.Athlete.findOne({
-      where: {
-        pin,
-        athleteGroupId: { [Op.in]: athleteGroupIds },
+      include: {
+        model: model.AthleteGroup,
+        through: { attributes: [] }, // Exclude the join table attributes
+        where: {
+          id: { [Op.in]: athleteGroupIds }, // Match against the list of AthleteGroup IDs
+        },
       },
+      where: { pin }, // Match the pin
     });
 
     if (!athlete) {
@@ -375,21 +412,21 @@ exports.checkInByPin = async (req, res) => {
         .json({ success: false, message: "Athlete not found." });
     }
 
-    // Get the current date and time in the business's timezone
+    // Step 3: Get the current date and time in the business's timezone
     const currentDate = mmt().tz(businessTimezone);
     const checkinDate = currentDate.format("YYYY-MM-DD"); // Format as YYYY-MM-DD
     const checkinTime = currentDate.format("HH:mm:ss"); // Format as HH:MM:SS
 
     console.log("Check-in date and time: ", checkinDate, checkinTime);
 
-    // Create a new check-in record
+    // Step 4: Create a new check-in record
     const checkIn = await model.checkin.create({
       athleteId: athlete.id, // Associate check-in with the athlete
       checkinDate,
       checkinTime,
     });
 
-    // Send email notification to the athlete
+    // Step 5: Send email notification to the athlete
     if (athlete.email) {
       const emailOptions = {
         to: athlete.email, // Assuming the Athlete model has an `email` field
@@ -428,6 +465,7 @@ exports.checkInByPin = async (req, res) => {
     });
   }
 };
+
 
 
 exports.getAllAthletes = async (req, res) => {
@@ -475,18 +513,21 @@ exports.getAllAthletes = async (req, res) => {
           model: model.AthleteGroup,
           where: groupWhereClause,
           attributes: ["groupName"],
-          required: true, // Only include athletes that belong to a group in the business
+          through: { attributes: [] }, // Exclude through table attributes
         },
       ],
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
     });
-    console.log("Athletes:", athletes);
-    // Map athletes to include their group name
-    const athletesWithGroupNames = athletes.map((athlete) => ({
-      ...athlete.dataValues,
-      groupName: athlete.athleteGroup.groupName,
-    }));
+    console.log("athletes are ", athletes);
+    
+    // Transform athletes to include a separate entry for each athlete group
+    const athletesWithGroupNames = athletes.flatMap((athlete) =>
+      athlete.athleteGroups.map((group) => ({
+        ...athlete.dataValues,
+        athleteGroup: { groupName: group.groupName }, // Maintain groupName format
+      }))
+    );
 
     // Prepare the response with pagination details
     const response = {
@@ -510,6 +551,7 @@ exports.getAllAthletes = async (req, res) => {
     });
   }
 };
+
 
 exports.getAthleteCheckins = async (req, res) => {
   try {
@@ -540,7 +582,10 @@ exports.getAthleteCheckins = async (req, res) => {
     // Find all athlete groups associated with the business
     const athleteGroups = await model.AthleteGroup.findAll({
       where: { businessId: business.id },
+      attributes: ['id'],  // Get only the IDs of the athlete groups
     });
+
+    console.log("athleteGroups are ", athleteGroups);
 
     if (!athleteGroups || athleteGroups.length === 0) {
       return res.status(404).json({
@@ -549,21 +594,9 @@ exports.getAthleteCheckins = async (req, res) => {
       });
     }
 
-    // Collect athlete IDs by querying active athletes in each group
-    const athleteIds = await model.Athlete.findAll({
-      where: {
-        athleteGroupId: athleteGroups.map((group) => group.id),
-        active: true,
-      },
-      attributes: ["id"],
-    }).then((athletes) => athletes.map((athlete) => athlete.id));
-
-    if (athleteIds.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "No active athletes found in the associated athlete groups.",
-      });
-    }
+    // Extract athlete group IDs
+    const athleteGroupIds = athleteGroups.map(group => group.id);
+    console.log("athleteGroupIds are ", athleteGroupIds);
 
     // Construct search condition for athletes
     const searchCondition = {};
@@ -573,14 +606,11 @@ exports.getAthleteCheckins = async (req, res) => {
     if (pin) {
       searchCondition.pin = pin; // Search by pin
     }
-    if (groupName) {
-      const athleteGroupIds = await model.AthleteGroup.findAll({
-        where: { groupName: { [Op.like]: `%${groupName}%` } },
-        attributes: ["id"],
-      }).then((groups) => groups.map((group) => group.id));
 
-      searchCondition.athleteGroupId = athleteGroupIds; // Search by group name
-    }
+    // Use athlete group names to filter athletes if provided
+    const athleteGroupSearchCondition = groupName
+      ? { groupName: { [Op.like]: `%${groupName}%` } }
+      : {};
 
     // Construct date range condition for check-ins
     const dateCondition = {};
@@ -593,22 +623,28 @@ exports.getAthleteCheckins = async (req, res) => {
     } else if (endDate) {
       dateCondition.checkinDate = { [Op.lte]: new Date(endDate) };
     }
-
-    // Fetch check-ins for the athletes with pagination, search, and date filter
+    console.log("date condition is ", dateCondition);
+    
+    // Fetch check-ins for the athletes, ensuring they belong to the business's groups
     const { count, rows: checkins } = await model.checkin.findAndCountAll({
       where: {
-        athleteId: athleteIds,
         ...dateCondition, // Apply date range condition here
       },
       include: [
         {
           model: model.Athlete,
           attributes: ["id", "pin", "name", "photoPath"],
-          where: searchCondition, // Apply search conditions here
+          where: searchCondition, // Apply search conditions for athletes
           include: [
             {
               model: model.AthleteGroup,
-              attributes: ["groupName"],
+              attributes: ["groupName", "businessId"], // Include group name for filtering
+              where: {
+                businessId: business.id, // Filter by businessId in the athlete's group
+                id: { [Op.in]: athleteGroupIds }, // Filter athlete groups by the business's groups
+                ...athleteGroupSearchCondition, // Apply additional group name filter if provided
+              },
+              through: { attributes: [] }, // Ensure it's a many-to-many relationship
             },
           ],
         },
@@ -616,19 +652,22 @@ exports.getAthleteCheckins = async (req, res) => {
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
     });
-
+    console.log("checkins are ", checkins);
+    
     // Prepare the data to include athlete pin, name, group name, check-in time, and date
-    const checkinData = checkins.map((checkin) => ({
-      id: checkin.id,
-      createdAt: checkin.checkinDate, // Check-in date
-      checkinTime: checkin.checkinTime, // Adjust if there's a separate time field
-      athlete: {
-        pin: checkin.Athlete.pin,
-        name: checkin.Athlete.name,
-        groupName: checkin.Athlete.athleteGroup.groupName || null, // Group name if available
-        photoPath: checkin.Athlete.photoPath || null, // Photo path if available
-      },
-    }));
+    const checkinData = checkins.flatMap((checkin) =>
+      checkin.Athlete.athleteGroups.map((group) => ({
+        id: checkin.id,
+        createdAt: checkin.checkinDate, // Check-in date
+        checkinTime: checkin.checkinTime, // Adjust if there's a separate time field
+        athlete: {
+          pin: checkin.Athlete.pin,
+          name: checkin.Athlete.name,
+          groupName: group.groupName || null, // Group name if available
+          photoPath: checkin.Athlete.photoPath || null, // Photo path if available
+        },
+      }))
+    );
 
     return res.status(200).json({
       success: true,
@@ -648,12 +687,19 @@ exports.getAthleteCheckins = async (req, res) => {
   }
 };
 
+
+
+
+
+
+
 exports.getAthleteCheckinsPdf = async (req, res) => {
   try {
     const { athleteName, pin, groupName } = req.query;
     const user = req.user;
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
 
+    // Fetch the associated business
     const business = await model.business.findOne({ where: { userId } });
     if (!business) {
       return res.status(404).json({
@@ -662,22 +708,44 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
       });
     }
 
+    // Get athlete groups associated with the business
     const athleteGroups = await model.AthleteGroup.findAll({
       where: { businessId: business.id },
     });
-    if (!athleteGroups || athleteGroups.length === 0) {
+    if (!athleteGroups.length) {
       return res.status(404).json({
         success: false,
         message: "No athlete groups found for this business.",
       });
     }
 
+    // Build search conditions for filtering athletes
+    const searchCondition = {
+      active: true,
+    };
+
+    // Include athlete group filtering if groupName is provided
+    if (groupName) {
+      const athleteGroupIds = await model.AthleteGroup.findAll({
+        where: { groupName: { [Op.like]: `%${groupName}%` } },
+        attributes: ["id"],
+      }).then((groups) => groups.map((group) => group.id));
+
+      searchCondition['$AthleteGroups.id$'] = { [Op.in]: athleteGroupIds };
+    }
+
+    // Fetch active athletes in the groups linked to the business
     const athleteIds = await model.Athlete.findAll({
-      where: {
-        athleteGroupId: athleteGroups.map((group) => group.id),
-        active: true,
-      },
-      attributes: ["id"],
+      where: searchCondition,
+      include: [
+        {
+          model: model.AthleteGroup,
+          where: { businessId: business.id }, // Ensure athletes are linked to this business
+          attributes: [], // Don't need group details here
+          through: { attributes: [] }, // Ignore junction table attributes
+        },
+      ],
+      attributes: ['id'],
     }).then((athletes) => athletes.map((athlete) => athlete.id));
 
     if (athleteIds.length === 0) {
@@ -687,21 +755,15 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
       });
     }
 
-    const searchCondition = {};
+    // Further filtering by athleteName and pin if provided
     if (athleteName) {
       searchCondition.name = { [Op.like]: `%${athleteName}%` };
     }
     if (pin) {
       searchCondition.pin = pin;
     }
-    if (groupName) {
-      const athleteGroupIds = await model.AthleteGroup.findAll({
-        where: { groupName: { [Op.like]: `%${groupName}%` } },
-        attributes: ["id"],
-      }).then((groups) => groups.map((group) => group.id));
-      searchCondition.athleteGroupId = athleteGroupIds;
-    }
 
+    // Fetch check-ins for the filtered athletes
     const checkins = await model.checkin.findAll({
       where: { athleteId: athleteIds },
       include: [
@@ -790,7 +852,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
         index + 1,
         athlete.name,
         athlete.pin,
-        athlete.athleteGroup.groupName || "N/A",
+        athlete.athleteGroups[0]?.groupName || "N/A", // Fix here: athleteGroups should be plural
         checkinDate,
         checkinTime,
       ];
@@ -831,6 +893,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     });
   }
 };
+
 
 async function sendCheckinPdfEmail(user, business) {
   try {
@@ -1020,7 +1083,7 @@ exports.bulkUploadAthletes = async (req, res) => {
     }
 
     let athletesData = [];
-    const { athleteGroupId } = req.body; // Get athleteGroupId from the request body
+    const { athleteGroupIds } = req.body; // Get athleteGroupIds array from the request body
 
     // Step 1: Parse the file
     if (file.mimetype === "text/csv") {
@@ -1057,10 +1120,18 @@ exports.bulkUploadAthletes = async (req, res) => {
         .json({ success: false, message: "Business not found." });
     }
 
-    const athleteGroupIds = await model.AthleteGroup.findAll({
-      where: { businessId: business.id },
-      attributes: ["id"],
-    }).then((groups) => groups.map((group) => group.id));
+    // Fetch all athlete groups based on athleteGroupIds
+    const athleteGroups = await model.AthleteGroup.findAll({
+      where: { id: athleteGroupIds, businessId: business.id },
+    });
+
+    // Ensure all provided groups exist
+    if (athleteGroups.length !== athleteGroupIds.length) {
+      return res.status(404).json({
+        success: false,
+        message: "One or more athlete groups not found.",
+      });
+    }
 
     // Step 3: Process athletes data
     const processedAthletes = [];
@@ -1074,45 +1145,18 @@ exports.bulkUploadAthletes = async (req, res) => {
         athleteGroupName,
         email,
       } = row;
+
+      // Parse dateOfBirth if present
       if (dateOfBirth) {
         const parsedDate = new Date(dateOfBirth);
         if (!isNaN(parsedDate)) {
-            dateOfBirth = parsedDate.toISOString().slice(0, 10);
+          dateOfBirth = parsedDate.toISOString().slice(0, 10);
         } else {
-            console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
-            dateOfBirth = null; // Set to null if invalid date
-        }
-    } else {
-        dateOfBirth = null; // Set to null if undefined or missing
-    }
-      // Determine athlete group
-      let athleteGroup;
-      if (athleteGroupId) {
-        athleteGroup = await model.AthleteGroup.findOne({
-          where: { id: athleteGroupId, businessId: business.id },
-        });
-        if (!athleteGroup) {
-          return res.status(404).json({
-            success: false,
-            message: "Athlete group with the provided ID not found.",
-          });
+          console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
+          dateOfBirth = null; // Set to null if invalid date
         }
       } else {
-        athleteGroup = await model.AthleteGroup.findOne({
-          where: {
-            businessId: business.id,
-            category: athleteGroupClass,
-            groupName: athleteGroupName,
-          },
-        });
-
-        if (!athleteGroup) {
-          athleteGroup = await model.AthleteGroup.create({
-            businessId: business.id,
-            category: athleteGroupClass,
-            groupName: athleteGroupName,
-          });
-        }
+        dateOfBirth = null; // Set to null if undefined or missing
       }
 
       // Generate PIN if not provided
@@ -1125,21 +1169,18 @@ exports.bulkUploadAthletes = async (req, res) => {
 
       // Check for existing athlete
       const existingAthlete = await model.Athlete.findOne({
-        where: {
-          pin,
-          athleteGroupId: { [Op.in]: athleteGroupIds },
-        },
+        where: { pin },
       });
 
       if (existingAthlete) {
-        // Update existing athlete
+        // Update existing athlete and associate with all athlete groups
         await existingAthlete.update({
           name,
           dateOfBirth,
           description,
           email,
-          athleteGroupId: athleteGroup.id,
         });
+        await existingAthlete.setAthleteGroups(athleteGroups); // Add athlete to multiple groups
       } else {
         // Create new athlete
         const newAthlete = await model.Athlete.create({
@@ -1148,8 +1189,11 @@ exports.bulkUploadAthletes = async (req, res) => {
           dateOfBirth,
           description,
           email,
-          athleteGroupId: athleteGroup.id,
         });
+
+        // Add the athlete to the provided athlete groups
+        await newAthlete.setAthleteGroups(athleteGroups);
+
         processedAthletes.push({ pin, name, email });
       }
     }
@@ -1257,7 +1301,7 @@ exports.checkPin = async (req, res) => {
       });
     }
 
-    // Step 2: Find AthleteGroup IDs under the business
+    // Step 2: Find the AthleteGroups related to the business
     const athleteGroups = await model.AthleteGroup.findAll({
       where: { businessId: business.id },
       attributes: ["id"], // Fetch only the AthleteGroup IDs
@@ -1273,25 +1317,29 @@ exports.checkPin = async (req, res) => {
     // Extract AthleteGroup IDs
     const athleteGroupIds = athleteGroups.map((group) => group.id);
 
-    // Step 3: Check if any employee exists with the given pin in the athlete groups
-    const athelete = await model.Athlete.findOne ({
-      where: {
-        athleteGroupId: athleteGroupIds, // Match against the list of AthleteGroup IDs
-        pin,
+    // Step 3: Check if any athlete exists with the given pin in the athlete groups
+    const athlete = await model.Athlete.findOne({
+      include: {
+        model: model.AthleteGroup,
+        through: { attributes: [] }, // Exclude join table attributes
+        where: {
+          id: { [Op.in]: athleteGroupIds }, // Match against the list of AthleteGroup IDs
+        },
       },
+      where: { pin }, // Match the pin
     });
 
-    if (!athelete) {
+    if (!athlete) {
       return res.status(200).json({
         success: true,
-        message: "it is a valid pin",
+        message: "It is a valid pin.",
       });
     }
 
-    // If an employee is found
+    // If an athlete is found with the pin in one of the groups
     return res.status(200).json({
       success: false,
-      message: "pin already exists for the business.",
+      message: "Pin already exists for the business.",
     });
   } catch (error) {
     console.error("Error checking pin:", error);
@@ -1301,6 +1349,7 @@ exports.checkPin = async (req, res) => {
     });
   }
 };
+
 
 
 

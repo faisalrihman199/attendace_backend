@@ -13,6 +13,7 @@ const subscription = require("./subscription")
 const business = require("./business")
 const checkin = require("./checkIn")
 const reporting = require("./reporting")
+const emailTemplate = require("./emailTemplate")
 
 
 user.hasOne(paymentDetails);
@@ -39,10 +40,11 @@ business.belongsTo(user)
 business.hasOne(reporting)
 reporting.belongsTo(business)
 
-AthleteGroup.hasMany(Athlete);
-Athlete.belongsTo(AthleteGroup);
+Athlete.belongsToMany(AthleteGroup, { through: 'AthleteAthleteGroups' })
+// AthleteGroup.js
+AthleteGroup.belongsToMany(Athlete, { through: 'AthleteAthleteGroups' });
 
 Athlete.hasMany(checkin,{ foreignKey: 'athleteId', onDelete: 'CASCADE' })
 checkin.belongsTo(Athlete,{foreignKey: 'athleteId'})
 
-module.exports = {user,tempUser,paymentDetails,paymentHistory,Athlete,AthleteGroup,plan,subscription,business,checkin,reporting};
+module.exports = {user,tempUser,paymentDetails,paymentHistory,Athlete,AthleteGroup,plan,subscription,business,checkin,reporting,emailTemplate};

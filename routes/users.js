@@ -23,6 +23,7 @@ router.put("/update",authmiddleware.authenticate("jwt",{session:false}),controll
 router.get("/getCards",authmiddleware.authenticate("jwt",{session:false}),controllers.user.getUserCards)
 router.delete("/cancelSubscription",authmiddleware.authenticate("jwt",{session:false}),controllers.user.cancelSubscription)
 router.put("/updateCard",authmiddleware.authenticate("jwt",{session:false}),controllers.user.updateCardInfo)
-
+router.post("/addMailTemplate",authmiddleware.authenticate("jwt",{session:false}),controllers.user.createEmailTemplate)
+router.post("/sendTemplateMail",authmiddleware.authenticate("jwt",{session:false}),controllers.user.sendBusinessEmail)
 module.exports = router;
 
