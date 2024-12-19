@@ -16,7 +16,7 @@ function getRandomNumber() {
     return Math.floor(Math.random() * 5) + 3;
   }
 
-  const sendEmailToSuperAdmins = async (subject, htmlContent) => {
+  const sendEmailToSuperAdmins = async (subject, messageBody) => {
     try {
       // Get all users with the role 'superAdmin'
       const superAdmins = await model.user.findAll({
@@ -31,21 +31,37 @@ function getRandomNumber() {
         return; // If no superAdmins are found, exit early
       }
   
+      // Fetch the email template for superAdmins
+      const emailTemplate = await model.emailTemplate.findOne({
+        where: { name: 'super_admin_notification' }, // Replace with actual template name
+      });
+  
+      if (!emailTemplate) {
+        console.log("No email template found for superAdmins.");
+        return; // If template is not found, exit early
+      }
+  
+      // Replace placeholders with actual content
+      let emailHtml = emailTemplate.htmlContent.replace('{{subject}}', subject);
+      emailHtml = emailHtml.replace('{{messageBody}}', messageBody);
+  
       // Send email to each superAdmin asynchronously
       for (const admin of superAdmins) {
         const emailOptions = {
           to: admin.email,
-          subject: subject,
-          html: htmlContent,
+          subject: emailTemplate.subject,
+          html: emailHtml, // Send the HTML content with dynamic placeholders replaced
         };
   
         console.log("Sending email to:", admin.email); // Debugging: log the email being sent
         await sendEmail(emailOptions); // Assuming sendEmail is a helper function for sending emails
       }
+  
     } catch (error) {
       console.error("Error sending email to superAdmins:", error);
     }
   };
+  
   
   exports.addBusiness = async (req, res) => {
     const transaction = await sequelize.transaction(); // Start a transaction

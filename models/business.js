@@ -9,7 +9,7 @@ const Business = sequelize.define('business', {
     },
     message: {
         type: DataTypes.TEXT,
-        allowNull: false,
+        allowNull: true,
     },
     photoPath: {
         type: DataTypes.STRING,

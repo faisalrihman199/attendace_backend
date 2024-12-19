@@ -15,17 +15,8 @@ const EmailTemplate = sequelize.define('emailTemplate', {
     htmlContent: {
       type: DataTypes.TEXT,  // Store the HTML content as text
       allowNull: false,
-    },
-    userId: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: user,  
-        key: 'id',
-      },
-      onDelete: 'CASCADE', 
-      onUpdate: 'CASCADE', 
-    },
+    }
+    
   });
   
   module.exports = EmailTemplate;

@@ -71,7 +71,6 @@ exports.sendOtp = async (req, res) => {
 
     // Check for existing temporary user
     const existingTempUser = await model.tempUser.findOne({ where: { email } });
-
     if (existingTempUser) {
       // Delete the existing temporary user
       await model.tempUser.destroy({ where: { email } });
@@ -89,24 +88,37 @@ exports.sendOtp = async (req, res) => {
       role: "admin",
     });
 
-    // Send OTP to user's email
+    // Fetch OTP email template from the database
+    const emailTemplate = await model.emailTemplate.findOne({
+      where: { name: 'otp_email_template' },  // Replace with your actual template name
+    });
+
+    if (!emailTemplate) {
+      return res.status(500).json({ success: false, message: 'Email template not found.' });
+    }
+
+    // Replace placeholders in the template
+    let emailHtml = emailTemplate.htmlContent.replace('{{otp}}', otp);
+    emailHtml = emailHtml.replace('{{firstName}}', firstName);
+
+    // Create the email options
     const mailOptions = {
       to: email,
-      subject: "Your OTP Code",
-      text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
+      subject: emailTemplate.subject,
+      html: emailHtml,  // Send HTML content instead of plain text
     };
+
+    // Send OTP email using the template
     await sendEmail(mailOptions);
 
     // Respond with success
     res.json({ success: true, message: "OTP sent to your email." });
   } catch (error) {
     console.error("Error sending OTP:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "An error occurred while sending OTP.",
-      });
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while sending OTP.",
+    });
   }
 };
 
@@ -1520,10 +1532,14 @@ exports.createEmailTemplate = async (req, res) => {
 
     // Ensure the business exists
     const user = req.user;
+    if(user.role !== "superAdmin"){
+      return res.status(403).json({ success: false, message: "Unauthorized." });
+    }
+
 
     // Create a new email template
     const emailTemplate = await model.emailTemplate.create({
-      userId: user.id,
+      
       name,
       subject,
       htmlContent,

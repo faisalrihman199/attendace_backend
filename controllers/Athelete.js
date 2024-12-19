@@ -121,6 +121,7 @@ exports.getUniquePin = async (req, res) => {
   }
 };
 
+
 exports.createAthlete = async (req, res) => {
   try {
     let {
@@ -128,13 +129,16 @@ exports.createAthlete = async (req, res) => {
       dateOfBirth,
       description,
       active,
-      athleteGroupIds,  // Now it's an array of group IDs
+      athleteGroupIds,
       pin,
       email,
     } = req.body;
     const user = req.user;
 
+    // Determine userId based on role
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
+
+    // Fetch the business associated with the userId
     const business = await model.business.findOne({ where: { userId } });
 
     if (!business) {
@@ -151,18 +155,13 @@ exports.createAthlete = async (req, res) => {
     });
 
     const athleteGroupIdsArray = athleteGroups.map(group => group.id);
-    console.log("athleteGroups are ", athleteGroups);  // Checking what comes from DB
-    console.log("athleteGroupIdsArray are ", athleteGroupIdsArray);
-
-    // Convert athleteGroupIds to integers if they are in string format
-    if (typeof athleteGroupIds === 'string') {
-      athleteGroupIds = athleteGroupIds.split(',').map(id => parseInt(id.trim(), 10));
+    if (typeof athleteGroupIds === "string") {
+      athleteGroupIds = athleteGroupIds.split(",").map(id => parseInt(id.trim(), 10));
     } else {
       athleteGroupIds = athleteGroupIds.map(id => parseInt(id, 10));
     }
-    console.log("Converted athleteGroupIds are ", athleteGroupIds);
 
-    // Ensure that the provided athleteGroupIds are valid for this business
+    // Ensure athlete groups are valid
     if (athleteGroupIds.some(id => !athleteGroupIdsArray.includes(id))) {
       return res.status(404).json({
         success: false,
@@ -170,47 +169,37 @@ exports.createAthlete = async (req, res) => {
       });
     }
 
-    // Check if the PIN already exists for any athlete in the same business groups
     let athlete = await model.Athlete.findOne({
-      where: {
-        pin,
-      },
+      where: { pin },
       include: {
         model: model.AthleteGroup,
-        where: {
-          id: { [Op.in]: athleteGroupIdsArray },
-        },
-        required: false,  // It's okay if there is no associated group yet
+        where: { id: { [Op.in]: athleteGroupIdsArray } },
+        required: false,
       },
     });
 
-    // Handle athlete update or creation
     if (athlete) {
-      // Remove old photo if a new one is uploaded
+      // Handle existing athlete
       if (req.file && athlete.photoPath) {
         const oldImagePath = path.join(
           __dirname,
           "../public/atheletes/",
           path.basename(athlete.photoPath)
         );
-        fs.unlink(oldImagePath, (err) => {
+        fs.unlink(oldImagePath, err => {
           if (err) console.error("Error deleting old image:", err);
         });
       }
 
-      // Update athlete information
       athlete = await athlete.update({
         name,
         dateOfBirth,
         email,
         description,
         active: active !== undefined ? active : athlete.active,
-        photoPath: req.file
-          ? `/public/atheletes/${req.file.filename}`
-          : athlete.photoPath,
+        photoPath: req.file ? `/public/atheletes/${req.file.filename}` : athlete.photoPath,
       });
 
-      // Update athlete's associated groups
       await athlete.setAthleteGroups(athleteGroupIds);
 
       return res.status(200).json({
@@ -219,7 +208,7 @@ exports.createAthlete = async (req, res) => {
         data: athlete,
       });
     } else {
-      // Create a new athlete
+      // Handle new athlete creation
       const newAthlete = await model.Athlete.create({
         pin,
         name,
@@ -230,45 +219,41 @@ exports.createAthlete = async (req, res) => {
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : null,
       });
 
-      if (dateOfBirth) {
-        const parsedDate = new Date(dateOfBirth);
-        if (!isNaN(parsedDate)) {
-          dateOfBirth = parsedDate.toISOString().slice(0, 10);
-        } else {
-          console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
-          dateOfBirth = null; // Set to null if invalid date
-        }
-      } else {
-        dateOfBirth = null; // Set to null if undefined or missing
-      }
-
-      // Associate the athlete with the selected groups
       await newAthlete.setAthleteGroups(athleteGroupIds);
 
-      // Fetch QR code image from external API
+      // Generate QR Code for the athlete's pin
       const qrCodeResponse = await axios.get(
-        `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(
-          pin
-        )}&size=256x256`,
-        {
-          responseType: "arraybuffer",
-        }
+        `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(pin)}&size=256x256`,
+        { responseType: "arraybuffer" }
       );
 
-      // Email content with embedded QR code
-      const finalHtmlContent = `...`;  // (Same email content as before)
+      // Fetch the email template from the database
+      const emailTemplate = await model.emailTemplate.findOne({ where: { name: "welcome_athlete" } });
+      if (!emailTemplate) {
+        return res.status(404).json({
+          success: false,
+          message: "Email template not found.",
+        });
+      }
 
-      // Send the email
+      // Replace all placeholders in the email template
+      let finalHtmlContent = emailTemplate.htmlContent
+        .replace(/{{athleteName}}/g, name)
+        .replace(/{{dateOfBirth}}/g, dateOfBirth || "N/A")  // If empty, default to "N/A"
+        .replace(/{{pin}}/g, pin)
+        .replace(/{{description}}/g, description || "No description provided.")  // If empty, default to "No description provided"
+        .replace(/{{qrCodeImage}}/g, "cid:qrcodeImage"); // Embed QR code image as an attachment
+
       const mailOptions = {
         to: email,
-        subject: "Welcome to Our Athletic Program!",
+        subject: emailTemplate.subject,
         html: finalHtmlContent,
         attachments: [
           {
             filename: "qrcode.png",
             content: qrCodeResponse.data,
             contentType: "image/png",
-            cid: "qrcodeImage", // same as the cid in the HTML img tag
+            cid: "qrcodeImage",  // Same cid as referenced in the HTML image tag
           },
         ],
       };
@@ -290,6 +275,9 @@ exports.createAthlete = async (req, res) => {
     });
   }
 };
+
+
+
 
 
 exports.deleteAthlete = async (req, res) => {
@@ -467,6 +455,91 @@ exports.checkInByPin = async (req, res) => {
 };
 
 
+// all thelete with seperate group name
+// exports.getAllAthletes = async (req, res) => {
+//   try {
+//     const user = req.user;
+//     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
+//     const {
+//       page = 1,
+//       limit = 10,
+//       athleteName,
+//       groupName,
+//       athleteId,
+//     } = req.query; // Extract search parameters
+//     const offset = (page - 1) * limit;
+
+//     // Find the business associated with the userId
+//     const business = await model.business.findOne({ where: { userId } });
+//     if (!business) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Business not found for the provided user.",
+//       });
+//     }
+
+//     // Build the where clause for Athlete
+//     const athleteWhereClause = {};
+//     if (athleteName) {
+//       athleteWhereClause.name = { [Op.like]: `%${athleteName}%` }; // Search for name containing athleteName
+//     }
+//     if (athleteId) {
+//       athleteWhereClause.pin = athleteId; // Match exact athleteId
+//     }
+
+//     // Build the where clause for AthleteGroup
+//     const groupWhereClause = { businessId: business.id }; // Always filter by businessId
+//     if (groupName) {
+//       groupWhereClause.groupName = { [Op.like]: `%${groupName}%` }; // Search for name containing groupName
+//     }
+
+//     // Fetch athletes with filtering, pagination, and join on AthleteGroups
+//     const { count, rows: athletes } = await model.Athlete.findAndCountAll({
+//       where: athleteWhereClause,
+//       include: [
+//         {
+//           model: model.AthleteGroup,
+//           where: groupWhereClause,
+//           attributes: ["groupName"],
+//           through: { attributes: [] }, // Exclude through table attributes
+//         },
+//       ],
+//       limit: parseInt(limit, 10),
+//       offset: parseInt(offset, 10),
+//     });
+//     console.log("athletes are ", athletes);
+    
+//     // Transform athletes to include a separate entry for each athlete group
+//     const athletesWithGroupNames = athletes.flatMap((athlete) =>
+//       athlete.athleteGroups.map((group) => ({
+//         ...athlete.dataValues,
+//         athleteGroup: { groupName: group.groupName }, // Maintain groupName format
+//       }))
+//     );
+
+//     // Prepare the response with pagination details
+//     const response = {
+//       success: true,
+//       message: "Athletes retrieved successfully.",
+//       data: {
+//         totalItems: count,
+//         totalPages: Math.ceil(count / limit),
+//         currentPage: parseInt(page, 10),
+//         athletes: athletesWithGroupNames,
+//       },
+//     };
+
+//     return res.status(200).json(response);
+//   } catch (error) {
+//     console.error("Error retrieving athletes:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "An error occurred while retrieving athletes.",
+//       error: error.message,
+//     });
+//   }
+// };
+
 
 exports.getAllAthletes = async (req, res) => {
   try {
@@ -519,15 +592,12 @@ exports.getAllAthletes = async (req, res) => {
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
     });
-    console.log("athletes are ", athletes);
-    
-    // Transform athletes to include a separate entry for each athlete group
-    const athletesWithGroupNames = athletes.flatMap((athlete) =>
-      athlete.athleteGroups.map((group) => ({
-        ...athlete.dataValues,
-        athleteGroup: { groupName: group.groupName }, // Maintain groupName format
-      }))
-    );
+
+    // Transform athletes to include an array of group names
+    const athletesWithGroupNames = athletes.map((athlete) => ({
+      ...athlete.dataValues,
+      athleteGroups: athlete.athleteGroups.map((group) => group.groupName), // Extract group names into an array
+    }));
 
     // Prepare the response with pagination details
     const response = {
@@ -552,6 +622,140 @@ exports.getAllAthletes = async (req, res) => {
   }
 };
 
+
+// exports.getAthleteCheckins = async (req, res) => {
+//   try {
+//     const {
+//       page = 1,
+//       limit = 10,
+//       athleteName,
+//       pin,
+//       groupName,
+//       startDate,
+//       endDate,
+//     } = req.query;
+//     const offset = (page - 1) * limit;
+
+//     // Determine userId based on role
+//     const user = req.user;
+//     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
+
+//     // Fetch business for the user
+//     const business = await model.business.findOne({ where: { userId } });
+//     if (!business) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Business not found for the provided user.",
+//       });
+//     }
+
+//     // Find all athlete groups associated with the business
+//     const athleteGroups = await model.AthleteGroup.findAll({
+//       where: { businessId: business.id },
+//       attributes: ['id'],  // Get only the IDs of the athlete groups
+//     });
+
+//     console.log("athleteGroups are ", athleteGroups);
+
+//     if (!athleteGroups || athleteGroups.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "No athlete groups found for this business.",
+//       });
+//     }
+
+//     // Extract athlete group IDs
+//     const athleteGroupIds = athleteGroups.map(group => group.id);
+//     console.log("athleteGroupIds are ", athleteGroupIds);
+
+//     // Construct search condition for athletes
+//     const searchCondition = {};
+//     if (athleteName) {
+//       searchCondition.name = { [Op.like]: `%${athleteName}%` }; // Search by athlete name
+//     }
+//     if (pin) {
+//       searchCondition.pin = pin; // Search by pin
+//     }
+
+//     // Use athlete group names to filter athletes if provided
+//     const athleteGroupSearchCondition = groupName
+//       ? { groupName: { [Op.like]: `%${groupName}%` } }
+//       : {};
+
+//     // Construct date range condition for check-ins
+//     const dateCondition = {};
+//     if (startDate && endDate) {
+//       dateCondition.checkinDate = {
+//         [Op.between]: [new Date(startDate), new Date(endDate)],
+//       };
+//     } else if (startDate) {
+//       dateCondition.checkinDate = { [Op.gte]: new Date(startDate) };
+//     } else if (endDate) {
+//       dateCondition.checkinDate = { [Op.lte]: new Date(endDate) };
+//     }
+//     console.log("date condition is ", dateCondition);
+    
+//     // Fetch check-ins for the athletes, ensuring they belong to the business's groups
+//     const { count, rows: checkins } = await model.checkin.findAndCountAll({
+//       where: {
+//         ...dateCondition, // Apply date range condition here
+//       },
+//       include: [
+//         {
+//           model: model.Athlete,
+//           attributes: ["id", "pin", "name", "photoPath"],
+//           where: searchCondition, // Apply search conditions for athletes
+//           include: [
+//             {
+//               model: model.AthleteGroup,
+//               attributes: ["groupName", "businessId"], // Include group name for filtering
+//               where: {
+//                 businessId: business.id, // Filter by businessId in the athlete's group
+//                 id: { [Op.in]: athleteGroupIds }, // Filter athlete groups by the business's groups
+//                 ...athleteGroupSearchCondition, // Apply additional group name filter if provided
+//               },
+//               through: { attributes: [] }, // Ensure it's a many-to-many relationship
+//             },
+//           ],
+//         },
+//       ],
+//       limit: parseInt(limit, 10),
+//       offset: parseInt(offset, 10),
+//     });
+//     console.log("checkins are ", checkins);
+    
+//     // Prepare the data to include athlete pin, name, group name, check-in time, and date
+//     const checkinData = checkins.flatMap((checkin) =>
+//       checkin.Athlete.athleteGroups.map((group) => ({
+//         id: checkin.id,
+//         createdAt: checkin.checkinDate, // Check-in date
+//         checkinTime: checkin.checkinTime, // Adjust if there's a separate time field
+//         athlete: {
+//           pin: checkin.Athlete.pin,
+//           name: checkin.Athlete.name,
+//           groupName: group.groupName || null, // Group name if available
+//           photoPath: checkin.Athlete.photoPath || null, // Photo path if available
+//         },
+//       }))
+//     );
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Active athlete check-ins retrieved successfully.",
+//       data: checkinData,
+//       currentPage: parseInt(page, 10),
+//       totalPages: Math.ceil(count / limit),
+//       totalCheckins: count,
+//     });
+//   } catch (error) {
+//     console.error("Error fetching active athlete check-ins:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "An error occurred while fetching active athlete check-ins.",
+//       error: error.message,
+//     });
+//   }
+// };
 
 exports.getAthleteCheckins = async (req, res) => {
   try {
@@ -582,10 +786,8 @@ exports.getAthleteCheckins = async (req, res) => {
     // Find all athlete groups associated with the business
     const athleteGroups = await model.AthleteGroup.findAll({
       where: { businessId: business.id },
-      attributes: ['id'],  // Get only the IDs of the athlete groups
+      attributes: ["id"],
     });
-
-    console.log("athleteGroups are ", athleteGroups);
 
     if (!athleteGroups || athleteGroups.length === 0) {
       return res.status(404).json({
@@ -595,16 +797,15 @@ exports.getAthleteCheckins = async (req, res) => {
     }
 
     // Extract athlete group IDs
-    const athleteGroupIds = athleteGroups.map(group => group.id);
-    console.log("athleteGroupIds are ", athleteGroupIds);
+    const athleteGroupIds = athleteGroups.map((group) => group.id);
 
     // Construct search condition for athletes
     const searchCondition = {};
     if (athleteName) {
-      searchCondition.name = { [Op.like]: `%${athleteName}%` }; // Search by athlete name
+      searchCondition.name = { [Op.like]: `%${athleteName}%` };
     }
     if (pin) {
-      searchCondition.pin = pin; // Search by pin
+      searchCondition.pin = pin;
     }
 
     // Use athlete group names to filter athletes if provided
@@ -623,28 +824,25 @@ exports.getAthleteCheckins = async (req, res) => {
     } else if (endDate) {
       dateCondition.checkinDate = { [Op.lte]: new Date(endDate) };
     }
-    console.log("date condition is ", dateCondition);
-    
+
     // Fetch check-ins for the athletes, ensuring they belong to the business's groups
     const { count, rows: checkins } = await model.checkin.findAndCountAll({
-      where: {
-        ...dateCondition, // Apply date range condition here
-      },
+      where: { ...dateCondition },
       include: [
         {
           model: model.Athlete,
           attributes: ["id", "pin", "name", "photoPath"],
-          where: searchCondition, // Apply search conditions for athletes
+          where: searchCondition,
           include: [
             {
               model: model.AthleteGroup,
-              attributes: ["groupName", "businessId"], // Include group name for filtering
+              attributes: ["groupName", "businessId"],
               where: {
-                businessId: business.id, // Filter by businessId in the athlete's group
-                id: { [Op.in]: athleteGroupIds }, // Filter athlete groups by the business's groups
-                ...athleteGroupSearchCondition, // Apply additional group name filter if provided
+                businessId: business.id,
+                id: { [Op.in]: athleteGroupIds },
+                ...athleteGroupSearchCondition,
               },
-              through: { attributes: [] }, // Ensure it's a many-to-many relationship
+              through: { attributes: [] },
             },
           ],
         },
@@ -652,22 +850,24 @@ exports.getAthleteCheckins = async (req, res) => {
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
     });
-    console.log("checkins are ", checkins);
-    
-    // Prepare the data to include athlete pin, name, group name, check-in time, and date
-    const checkinData = checkins.flatMap((checkin) =>
-      checkin.Athlete.athleteGroups.map((group) => ({
+
+    // Transform data to include groupNames as an array for each athlete
+    const checkinData = checkins.map((checkin) => {
+      const athlete = checkin.Athlete;
+      const groupNames = athlete.athleteGroups.map((group) => group.groupName);
+
+      return {
         id: checkin.id,
-        createdAt: checkin.checkinDate, // Check-in date
-        checkinTime: checkin.checkinTime, // Adjust if there's a separate time field
+        createdAt: checkin.checkinDate,
+        checkinTime: checkin.checkinTime,
         athlete: {
-          pin: checkin.Athlete.pin,
-          name: checkin.Athlete.name,
-          groupName: group.groupName || null, // Group name if available
-          photoPath: checkin.Athlete.photoPath || null, // Photo path if available
+          pin: athlete.pin,
+          name: athlete.name,
+          photoPath: athlete.photoPath || null,
+          groupNames, // Array of group names
         },
-      }))
-    );
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -692,6 +892,206 @@ exports.getAthleteCheckins = async (req, res) => {
 
 
 
+// exports.getAthleteCheckinsPdf = async (req, res) => {
+//   try {
+//     const { athleteName, pin, groupName } = req.query;
+//     const user = req.user;
+//     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
+
+//     // Fetch the associated business
+//     const business = await model.business.findOne({ where: { userId } });
+//     if (!business) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Business not found for the provided user.",
+//       });
+//     }
+
+//     // Get athlete groups associated with the business
+//     const athleteGroups = await model.AthleteGroup.findAll({
+//       where: { businessId: business.id },
+//     });
+//     if (!athleteGroups.length) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "No athlete groups found for this business.",
+//       });
+//     }
+
+//     // Build search conditions for filtering athletes
+//     const searchCondition = {
+//       active: true,
+//     };
+
+//     // Include athlete group filtering if groupName is provided
+//     if (groupName) {
+//       const athleteGroupIds = await model.AthleteGroup.findAll({
+//         where: { groupName: { [Op.like]: `%${groupName}%` } },
+//         attributes: ["id"],
+//       }).then((groups) => groups.map((group) => group.id));
+
+//       searchCondition['$AthleteGroups.id$'] = { [Op.in]: athleteGroupIds };
+//     }
+
+//     // Fetch active athletes in the groups linked to the business
+//     const athleteIds = await model.Athlete.findAll({
+//       where: searchCondition,
+//       include: [
+//         {
+//           model: model.AthleteGroup,
+//           where: { businessId: business.id }, // Ensure athletes are linked to this business
+//           attributes: [], // Don't need group details here
+//           through: { attributes: [] }, // Ignore junction table attributes
+//         },
+//       ],
+//       attributes: ['id'],
+//     }).then((athletes) => athletes.map((athlete) => athlete.id));
+
+//     if (athleteIds.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "No active athletes found in the associated athlete groups.",
+//       });
+//     }
+
+//     // Further filtering by athleteName and pin if provided
+//     if (athleteName) {
+//       searchCondition.name = { [Op.like]: `%${athleteName}%` };
+//     }
+//     if (pin) {
+//       searchCondition.pin = pin;
+//     }
+
+//     // Fetch check-ins for the filtered athletes
+//     const checkins = await model.checkin.findAll({
+//       where: { athleteId: athleteIds },
+//       include: [
+//         {
+//           model: model.Athlete,
+//           attributes: ["id", "pin", "name"],
+//           where: searchCondition,
+//           include: [
+//             {
+//               model: model.AthleteGroup,
+//               attributes: ["groupName"],
+//             },
+//           ],
+//         },
+//       ],
+//     });
+
+//     if (checkins.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "No check-ins found for the given criteria.",
+//       });
+//     }
+
+//     // Create PDF
+//     const doc = new PDFDocument();
+//     const filename = `athlete_checkins_${Date.now()}.pdf`;
+//     res.setHeader("Content-disposition", `attachment; filename=${filename}`);
+//     res.setHeader("Content-type", "application/pdf");
+//     doc.pipe(res);
+
+//     // Title
+//     doc.fontSize(20).text("Athlete Check-ins", { align: "center" });
+//     doc.moveDown();
+
+//     // Table headers and columns with borders
+//     const headers = [
+//       "S.No",
+//       "Athlete Name",
+//       "Athlete Id",
+//       "Group Name",
+//       "Check-in Date",
+//       "Check-in Time",
+//     ];
+//     const columnWidths = [50, 150, 100, 100, 100, 100];
+//     const startX = 7;
+//     let currentY = doc.y;
+
+//     // Draw headers with background color and bold text
+//     headers.forEach((header, i) => {
+//       // Draw background for header
+//       doc
+//         .rect(
+//           startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0),
+//           currentY,
+//           columnWidths[i],
+//           20
+//         )
+//         .fillAndStroke("#d0f0c0", "black") // Light green fill with black border
+//         .lineWidth(1)
+//         .stroke();
+
+//       // Add header text
+//       doc
+//         .font("Helvetica-Bold")
+//         .fontSize(12)
+//         .fillColor("black")
+//         .text(
+//           header,
+//           startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0) + 5,
+//           currentY + 5,
+//           {
+//             width: columnWidths[i] - 10,
+//             align: "center",
+//           }
+//         );
+//     });
+//     currentY += 20;
+
+//     // Draw table rows with borders
+//     checkins.forEach((checkin, index) => {
+//       const athlete = checkin.Athlete;
+//       const checkinDate = new Date(checkin.checkinDate).toLocaleDateString();
+//       const checkinTime = checkin.checkinTime;
+//       const row = [
+//         index + 1,
+//         athlete.name,
+//         athlete.pin,
+//         athlete.athleteGroups[0]?.groupName || "N/A", // Fix here: athleteGroups should be plural
+//         checkinDate,
+//         checkinTime,
+//       ];
+
+//       row.forEach((data, i) => {
+//         doc
+//           .rect(
+//             startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0),
+//             currentY,
+//             columnWidths[i],
+//             20
+//           )
+//           .strokeColor("black")
+//           .lineWidth(1)
+//           .stroke()
+//           .font("Helvetica")
+//           .fontSize(10)
+//           .text(
+//             data,
+//             startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0) + 5,
+//             currentY + 5,
+//             {
+//               width: columnWidths[i] - 10,
+//               align: "center",
+//             }
+//           );
+//       });
+//       currentY += 20;
+//     });
+
+//     doc.end();
+//   } catch (error) {
+//     console.error("Error fetching active athlete check-ins:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "An error occurred while fetching active athlete check-ins.",
+//       error: error.message,
+//     });
+//   }
+// };
 
 exports.getAthleteCheckinsPdf = async (req, res) => {
   try {
@@ -720,9 +1120,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     }
 
     // Build search conditions for filtering athletes
-    const searchCondition = {
-      active: true,
-    };
+    const searchCondition = { active: true };
 
     // Include athlete group filtering if groupName is provided
     if (groupName) {
@@ -731,7 +1129,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
         attributes: ["id"],
       }).then((groups) => groups.map((group) => group.id));
 
-      searchCondition['$AthleteGroups.id$'] = { [Op.in]: athleteGroupIds };
+      searchCondition["$AthleteGroups.id$"] = { [Op.in]: athleteGroupIds };
     }
 
     // Fetch active athletes in the groups linked to the business
@@ -745,7 +1143,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
           through: { attributes: [] }, // Ignore junction table attributes
         },
       ],
-      attributes: ['id'],
+      attributes: ["id"],
     }).then((athletes) => athletes.map((athlete) => athlete.id));
 
     if (athleteIds.length === 0) {
@@ -775,6 +1173,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
             {
               model: model.AthleteGroup,
               attributes: ["groupName"],
+              through: { attributes: [] },
             },
           ],
         },
@@ -799,22 +1198,21 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     doc.fontSize(20).text("Athlete Check-ins", { align: "center" });
     doc.moveDown();
 
-    // Table headers and columns with borders
+    // Table headers and columns
     const headers = [
       "S.No",
       "Athlete Name",
       "Athlete Id",
-      "Group Name",
+      "Group Names",
       "Check-in Date",
       "Check-in Time",
     ];
-    const columnWidths = [50, 150, 100, 100, 100, 100];
+    const columnWidths = [40, 120, 80, 160, 100, 100];
     const startX = 7;
     let currentY = doc.y;
 
-    // Draw headers with background color and bold text
+    // Draw headers
     headers.forEach((header, i) => {
-      // Draw background for header
       doc
         .rect(
           startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0),
@@ -822,11 +1220,10 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
           columnWidths[i],
           20
         )
-        .fillAndStroke("#d0f0c0", "black") // Light green fill with black border
+        .fillAndStroke("#d0f0c0", "black")
         .lineWidth(1)
         .stroke();
 
-      // Add header text
       doc
         .font("Helvetica-Bold")
         .fontSize(12)
@@ -843,16 +1240,18 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     });
     currentY += 20;
 
-    // Draw table rows with borders
+    // Draw table rows
     checkins.forEach((checkin, index) => {
       const athlete = checkin.Athlete;
       const checkinDate = new Date(checkin.checkinDate).toLocaleDateString();
       const checkinTime = checkin.checkinTime;
+      const groupNames = athlete.athleteGroups.map((group) => group.groupName);
+
       const row = [
         index + 1,
         athlete.name,
         athlete.pin,
-        athlete.athleteGroups[0]?.groupName || "N/A", // Fix here: athleteGroups should be plural
+        groupNames.join(", "), // Join group names into a string
         checkinDate,
         checkinTime,
       ];
@@ -893,6 +1292,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     });
   }
 };
+
 
 
 async function sendCheckinPdfEmail(user, business) {
