@@ -40,9 +40,17 @@ business.belongsTo(user)
 business.hasOne(reporting)
 reporting.belongsTo(business)
 
-Athlete.belongsToMany(AthleteGroup, { through: 'AthleteAthleteGroups' })
+Athlete.belongsToMany(AthleteGroup, { 
+    through: 'AthleteAthleteGroups', 
+    onDelete: 'CASCADE' // Deletes junction table records when an athlete is deleted
+  });
+  
 // AthleteGroup.js
-AthleteGroup.belongsToMany(Athlete, { through: 'AthleteAthleteGroups' });
+AthleteGroup.belongsToMany(Athlete, { 
+    through: 'AthleteAthleteGroups', 
+    onDelete: 'CASCADE' // Deletes junction table records when an athlete group is deleted
+  });
+  
 
 Athlete.hasMany(checkin,{ foreignKey: 'athleteId', onDelete: 'CASCADE' })
 checkin.belongsTo(Athlete,{foreignKey: 'athleteId'})

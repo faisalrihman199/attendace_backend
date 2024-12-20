@@ -15,7 +15,12 @@ const EmailTemplate = sequelize.define('emailTemplate', {
     htmlContent: {
       type: DataTypes.TEXT,  // Store the HTML content as text
       allowNull: false,
-    }
+    },
+    senderName: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'Attendace'
+    },
     
   });
   

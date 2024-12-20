@@ -785,6 +785,10 @@ exports.deleteAthleteGroup = async (req, res) => {
                     model: model.business,
                     attributes: ["id", "userId", "name"], // Include the business and its ID/userId
                 },
+                {
+                    model: model.Athlete, // Include athletes associated with the group
+                    attributes: ["id"],
+                },
             ],
         });
 
@@ -803,7 +807,8 @@ exports.deleteAthleteGroup = async (req, res) => {
                 message: "You are not authorized to delete this athlete group.",
             });
         }
-
+        console.log(`Default - ${athleteGroup.business.name}`);
+        
         // Find the default athlete group for the business
         const defaultAthleteGroup = await model.AthleteGroup.findOne({
             where: {
@@ -819,18 +824,28 @@ exports.deleteAthleteGroup = async (req, res) => {
             });
         }
 
-        // Reassign all athletes from the deleted group to the default group
-        await model.Athlete.update(
-            { athleteGroupId: defaultAthleteGroup.id },
-            { where: { athleteGroupId: id } }
-        );
+        // Reassign athletes from the current group to the default group
+        if (athleteGroup.Athletes && athleteGroup.Athletes.length > 0) {
+            for (const athlete of athleteGroup.Athletes) {
+                // Check if the athlete is already part of the default group
+                const isAlreadyInDefault = await defaultAthleteGroup.hasAthlete(athlete);
+
+                if (!isAlreadyInDefault) {
+                    // Add the athlete to the default group
+                    await defaultAthleteGroup.addAthlete(athlete);
+                }
+            }
+
+            // Remove all athletes from the current group
+            await athleteGroup.removeAthletes(athleteGroup.Athletes);
+        }
 
         // Delete the athlete group
         await athleteGroup.destroy();
 
         return res.status(200).json({
             success: true,
-            message: "Athlete group deleted successfully. Athletes moved to the default group.",
+            message: "Athlete group deleted successfully",
         });
     } catch (error) {
         console.error("Error deleting athlete group:", error);
@@ -841,6 +856,7 @@ exports.deleteAthleteGroup = async (req, res) => {
         });
     }
 };
+
 
 
 

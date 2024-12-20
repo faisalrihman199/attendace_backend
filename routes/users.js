@@ -25,5 +25,6 @@ router.delete("/cancelSubscription",authmiddleware.authenticate("jwt",{session:f
 router.put("/updateCard",authmiddleware.authenticate("jwt",{session:false}),controllers.user.updateCardInfo)
 router.post("/addMailTemplate",authmiddleware.authenticate("jwt",{session:false}),controllers.user.createEmailTemplate)
 router.post("/sendTemplateMail",authmiddleware.authenticate("jwt",{session:false}),controllers.user.sendBusinessEmail)
+router.get("/getMailTemplates",authmiddleware.authenticate("jwt",{session:false}),controllers.user.getEmailTemplateList)
 module.exports = router;
 

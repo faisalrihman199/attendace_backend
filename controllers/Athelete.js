@@ -425,21 +425,24 @@ exports.checkInByPin = async (req, res) => {
       checkinTime,
     });
 
-    // Step 5: Send email notification to the athlete
-    if (athlete.email) {
+    // Step 5: Fetch the email template
+    const emailTemplate = await model.emailTemplate.findOne({
+      where: { name: "CheckInConfirmation" },
+    });
+
+    if (emailTemplate && athlete.email) {
+      // Replace placeholders with actual values
+      const emailContent = emailTemplate.htmlContent
+        .replace(/{{athleteName}}/g, athlete.name)
+        .replace(/{{checkinDate}}/g, checkinDate)
+        .replace(/{{checkinTime}}/g, checkinTime)
+        .replace(/{{businessName}}/g, business.name);
+
+      // Send the email
       const emailOptions = {
-        to: athlete.email, // Assuming the Athlete model has an `email` field
-        subject: "Check-In Successful",
-        html: `
-          <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-            <h2 style="color: #4CAF50;">Check-In Confirmation</h2>
-            <p>Dear ${athlete.name},</p>
-            <p>We are pleased to inform you that your check-in on <strong>${checkinDate}</strong> at <strong>${checkinTime}</strong> was successful.</p>
-            <p>Thank you for visiting us. We hope you have a great experience!</p>
-            <p style="margin-top: 20px;">Best Regards,</p>
-            <p><strong>${business.name}</strong></p>
-          </div>
-        `,
+        to: athlete.email,
+        subject: emailTemplate.subject,
+        html: emailContent,
       };
       await sendEmail(emailOptions);
     }
@@ -562,8 +565,10 @@ exports.getAllAthletes = async (req, res) => {
       athleteName,
       groupName,
       athleteId,
-    } = req.query; // Extract search parameters
-    const offset = (page - 1) * limit;
+    } = req.query;
+
+    const parsedPage = parseInt(page, 10);
+    const parsedLimit = parseInt(limit, 10);
 
     // Find the business associated with the userId
     const business = await model.business.findOne({ where: { userId } });
@@ -577,52 +582,87 @@ exports.getAllAthletes = async (req, res) => {
     // Build the where clause for Athlete
     const athleteWhereClause = {};
     if (athleteName) {
-      athleteWhereClause.name = { [Op.like]: `%${athleteName}%` }; // Search for name containing athleteName
+      athleteWhereClause.name = { [Op.like]: `%${athleteName}%` };
     }
     if (athleteId) {
-      athleteWhereClause.pin = athleteId; // Match exact athleteId
+      athleteWhereClause.pin = athleteId;
     }
 
     // Build the where clause for AthleteGroup
-    const groupWhereClause = { businessId: business.id }; // Always filter by businessId
+    const groupWhereClause = { businessId: business.id };
     if (groupName) {
-      groupWhereClause.groupName = { [Op.like]: `%${groupName}%` }; // Search for name containing groupName
+      groupWhereClause.groupName = { [Op.like]: `%${groupName}%` };
     }
 
-    // Fetch athletes with filtering, pagination, and join on AthleteGroups
-    const { count, rows: athletes } = await model.Athlete.findAndCountAll({
+    // Count total items
+    const totalItems = await model.Athlete.count({
+      where: athleteWhereClause,
+      include: [
+        {
+          model: model.AthleteGroup,
+          where: groupWhereClause,
+        },
+      ],
+      distinct: true, // Ensure deduplication for count
+    });
+
+    console.log("totalItems are ", totalItems);
+    
+
+    const totalPages = Math.ceil(totalItems / parsedLimit);
+
+    // Validate the requested page number
+    if (parsedPage > totalPages || parsedPage < 1) {
+      return res.status(200).json({
+        success: true,
+        message: "Page out of range.",
+        data: {
+          totalItems,
+          totalPages,
+          currentPage: parsedPage,
+          athletes: [],
+        },
+      });
+    }
+
+    const offset = (parsedPage - 1) * parsedLimit;
+
+    // Fetch athletes with filtering and pagination
+    const athletes = await model.Athlete.findAll({
       where: athleteWhereClause,
       include: [
         {
           model: model.AthleteGroup,
           where: groupWhereClause,
           attributes: ["groupName"],
-          through: { attributes: [] }, // Exclude through table attributes
+          through: { attributes: [] },
         },
       ],
-      limit: parseInt(limit, 10),
-      offset: parseInt(offset, 10),
+      distinct: true, // Ensure deduplication for count
+      limit: parsedLimit,
+      offset,
     });
 
-    // Transform athletes to include an array of group names
+    console.log("athletes are ", athletes.length);
+    
+
+    // Transform athletes to include a comma-separated string of group names
     const athletesWithGroupNames = athletes.map((athlete) => ({
       ...athlete.dataValues,
-      athleteGroups: athlete.athleteGroups.map((group) => group.groupName), // Extract group names into an array
+      groupName: athlete.athleteGroups.map((group) => group.groupName).join(", "),
     }));
 
-    // Prepare the response with pagination details
-    const response = {
+    // Prepare the response
+    return res.status(200).json({
       success: true,
       message: "Athletes retrieved successfully.",
       data: {
-        totalItems: count,
-        totalPages: Math.ceil(count / limit),
-        currentPage: parseInt(page, 10),
+        totalItems,
+        totalPages,
+        currentPage: parsedPage,
         athletes: athletesWithGroupNames,
       },
-    };
-
-    return res.status(200).json(response);
+    });
   } catch (error) {
     console.error("Error retrieving athletes:", error);
     return res.status(500).json({
@@ -632,6 +672,8 @@ exports.getAllAthletes = async (req, res) => {
     });
   }
 };
+
+
 
 
 // exports.getAthleteCheckins = async (req, res) => {
@@ -858,14 +900,18 @@ exports.getAthleteCheckins = async (req, res) => {
           ],
         },
       ],
+      distinct: true, // Ensure deduplication for count
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
     });
 
+    console.log("count is ", count,checkins.length);
+    
+
     // Transform data to include groupNames as an array for each athlete
     const checkinData = checkins.map((checkin) => {
       const athlete = checkin.Athlete;
-      const groupNames = athlete.athleteGroups.map((group) => group.groupName);
+      const groupNames = athlete.athleteGroups.map((group) => group.groupName).join(", ");
 
       return {
         id: checkin.id,
@@ -879,6 +925,9 @@ exports.getAthleteCheckins = async (req, res) => {
         },
       };
     });
+
+    console.log("checkinData is ", checkinData.length);
+    
 
     return res.status(200).json({
       success: true,
@@ -1841,3 +1890,50 @@ const scheduler = cron.schedule("0 0 * * *", async () => {
 
 // Start the cron job
 scheduler.start();
+
+
+exports.getAthleteByQuery = async (req, res) => {
+  try {
+    const { id } = req.query; // Athlete ID from the query parameters
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Athlete ID is required as a query parameter.",
+      });
+    }
+
+    // Fetch the athlete with associated athlete groups
+    const athlete = await model.Athlete.findOne({
+      where: { id },
+      include: [
+        {
+          model: model.AthleteGroup, // Include associated athlete groups
+          attributes: ["id", "groupName"], // Customize the attributes you want to return
+          through: { attributes: [] }, // Exclude attributes from the junction table
+        },
+      ],
+    });
+
+    // Check if the athlete exists
+    if (!athlete) {
+      return res.status(404).json({
+        success: false,
+        message: "Athlete not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Athlete retrieved successfully.",
+      data: athlete,
+    });
+  } catch (error) {
+    console.error("Error fetching athlete:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching the athlete.",
+      error: error.message,
+    });
+  }
+};

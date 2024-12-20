@@ -1526,36 +1526,56 @@ exports.changeSubscription = async (req, res) => {
 };
 
 
-exports.createEmailTemplate = async (req, res) => {
+exports.createEmailTemplate =  async (req, res) => {
   try {
-    const { name, subject, htmlContent } = req.body;
+    const {id, subject, htmlContent, senderName } = req.body;
+    let  templateId  = id;
 
-    // Ensure the business exists
+    // Ensure the user has superAdmin role
     const user = req.user;
-    if(user.role !== "superAdmin"){
+    if (user.role !== "superAdmin") {
       return res.status(403).json({ success: false, message: "Unauthorized." });
     }
 
+    let emailTemplate;
+
+    if (templateId) {
+      // Update the existing email template
+      emailTemplate = await model.emailTemplate.findOne({ where: { id: templateId } });
+      if (!emailTemplate) {
+        return res.status(404).json({
+          success: false,
+          message: "Email template not found.",
+        });
+      }
+
+      await emailTemplate.update({ subject, htmlContent, senderName });
+      return res.status(200).json({
+        success: true,
+        message: "Email template updated successfully.",
+        data: emailTemplate,
+      });
+    }
 
     // Create a new email template
-    const emailTemplate = await model.emailTemplate.create({
-      
+    const { name } = req.body; // Name is only allowed when creating
+    emailTemplate = await model.emailTemplate.create({
       name,
       subject,
       htmlContent,
+      senderName,
     });
 
     res.status(201).json({
       success: true,
-      message: 'Email template created successfully.',
+      message: "Email template created successfully.",
       data: emailTemplate,
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ success: false, message: 'Error creating email template.' });
+    res.status(500).json({ success: false, message: "Error creating or updating email template." });
   }
 };
-
 exports.sendBusinessEmail = async (req, res) => {
   try {
     const { recipientEmail, recipientName, templateName } = req.body;
@@ -1600,3 +1620,31 @@ exports.sendBusinessEmail = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to send email.' });
   }
 };
+
+exports.getEmailTemplateList = async (req, res) => {
+  try {
+    // Check user authorization
+    const user = req.user;
+    if (user.role !== "superAdmin") {
+      return res.status(403).json({ success: false, message: "Unauthorized." });
+    }
+
+    // Fetch all email templates with only id and name
+    const emailTemplates = await model.emailTemplate.findAll({
+      attributes: ["id", "name"], // Select only id and name
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Email templates retrieved successfully.",
+      data: emailTemplates,
+    });
+  } catch (error) {
+    console.error("Error fetching email templates:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching email templates.",
+    });
+  }
+};
+
