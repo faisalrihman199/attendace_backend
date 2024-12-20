@@ -160,7 +160,18 @@ exports.createAthlete = async (req, res) => {
     } else {
       athleteGroupIds = athleteGroupIds.map(id => parseInt(id, 10));
     }
-
+    
+    if (dateOfBirth) {
+      const parsedDate = new Date(dateOfBirth);
+      if (!isNaN(parsedDate)) {
+        dateOfBirth = parsedDate.toISOString().slice(0, 10);
+      } else {
+        console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
+        dateOfBirth = null; // Set to null if invalid date
+      }
+    } else {
+      dateOfBirth = null; // Set to null if undefined or missing
+    }
     // Ensure athlete groups are valid
     if (athleteGroupIds.some(id => !athleteGroupIdsArray.includes(id))) {
       return res.status(404).json({
