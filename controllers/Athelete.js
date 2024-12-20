@@ -166,7 +166,7 @@ exports.createAthlete = async (req, res) => {
       if (!isNaN(parsedDate)) {
         dateOfBirth = parsedDate.toISOString().slice(0, 10);
       } else {
-        console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
+        // console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
         dateOfBirth = null; // Set to null if invalid date
       }
     } else {
