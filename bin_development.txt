@@ -4,42 +4,37 @@ var app = require('../app');
 var debug = require('debug')('attendance:server');
 var https = require('https');
 var fs = require('fs');
-var path = require('path'); // Ensure you have the path module
+var path = require('path');
 var db = require('../config/db');
 const PaymentPlan = require('../models/plan');
 const EmailTemplate = require('../models/emailTemplate'); // Adjust the path accordingly
 require("dotenv").config();
 
 const defaultPaymentPlan = [
-    {
-      planId: process.env.STRIPE_PRICE_ID_45,
-      planPrice: 45,
-      planType: '1 month',
-    },
-    {
-      planId: process.env.STRIPE_PRICE_ID_30,
-      planPrice: 30,
-      planType: '1 month',
-    },
-  ];
+  {
+    planId: process.env.STRIPE_PRICE_ID_45,
+    planPrice: 45,
+    planType: '1 month',
+  },
+  {
+    planId: process.env.STRIPE_PRICE_ID_30,
+    planPrice: 30,
+    planType: '1 month',
+  },
+];
 
 const createDefaultPaymentPlan = async () => {
   try {
-    // Map each plan to a promise for checking and creating
     const planPromises = defaultPaymentPlan.map(async (plan) => {
-      // Check if the payment plan already exists
       const existingPlan = await PaymentPlan.findOne({ where: { planId: plan.planId } });
-
       if (!existingPlan) {
-        // Create the default payment plan
         await PaymentPlan.create(plan);
-        console.log(Payment plan ${plan.planId} created successfully.);
+        console.log(`Payment plan ${plan.planId} created successfully.`);
       } else {
-        console.log(Payment plan ${plan.planId} already exists.);
+        console.log(`Payment plan ${plan.planId} already exists.`);
       }
     });
 
-    // Wait for all promises to resolve
     await Promise.all(planPromises);
 
     console.log('Default payment plans processed successfully.');
@@ -48,14 +43,12 @@ const createDefaultPaymentPlan = async () => {
   }
 };
 
-const defaultEmailTemplates = require('./defaultTemplates')
-
+const defaultEmailTemplates = require('./defaultTemplates'); // Ensure correct relative path
 
 const createDefaultEmailTemplates = async () => {
   try {
     const templatePromises = defaultEmailTemplates.map(async (template) => {
       const existingTemplate = await EmailTemplate.findOne({ where: { name: template.name } });
-
       if (!existingTemplate) {
         await EmailTemplate.create(template);
         console.log(`Email template ${template.name} created successfully.`);
@@ -73,63 +66,61 @@ const createDefaultEmailTemplates = async () => {
 };
 
 var options = {
-    key: fs.readFileSync('/etc/ssl/private/_.attendace.app_private_key.key'),
-    cert: fs.readFileSync('/etc/ssl/certs/attendace.app_ssl_certificate.crt'),
-    ca: fs.readFileSync('/etc/ssl/certs/attendace1cabundle.crt')
+  key: fs.readFileSync('/etc/ssl/private/_.attendace.app_private_key.key'),
+  cert: fs.readFileSync('/etc/ssl/certs/attendace.app_ssl_certificate.crt'),
+  ca: fs.readFileSync('/etc/ssl/certs/attendace1cabundle.crt'),
 };
 
 var port = normalizePort(process.env.PORT || '5000');
 app.set('port', port);
 
-// Create HTTPS server
 var server = https.createServer(options, app);
 
-// Listen on provided port, on all network interfaces
 server.listen(port);
 server.on('error', onError);
 server.on('listening', onListening);
 
-db.sync() // Ensure that the database tables are created
-    .then(() => {
-        createDefaultPaymentPlan();
-        createDefaultEmailTemplates();
-    })
-    .catch(err => {
-        console.error('Error syncing database:', err);
-    });
+db.sync()
+  .then(() => {
+    createDefaultPaymentPlan();
+    createDefaultEmailTemplates();
+  })
+  .catch(err => {
+    console.error('Error syncing database:', err);
+  });
 
 function normalizePort(val) {
-    var port = parseInt(val, 10);
-    if (isNaN(port)) {
-        return val; // named pipe
-    }
-    if (port >= 0) {
-        return port; // port number
-    }
-    return false;
+  var port = parseInt(val, 10);
+  if (isNaN(port)) {
+    return val; // named pipe
+  }
+  if (port >= 0) {
+    return port; // port number
+  }
+  return false;
 }
 
 function onError(error) {
-    if (error.syscall !== 'listen') {
-        throw error;
-    }
-    var bind = typeof port === 'string' ? 'Pipe ' + port : 'Port ' + port;
-    switch (error.code) {
-        case 'EACCES':
-            console.error(bind + ' requires elevated privileges');
-            process.exit(1);
-            break;
-        case 'EADDRINUSE':
-            console.error(bind + ' is already in use');
-            process.exit(1);
-            break;
-        default:
-            throw error;
-    }
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+  var bind = typeof port === 'string' ? 'Pipe ' + port : 'Port ' + port;
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
 }
 
 function onListening() {
-    var addr = server.address();
-    var bind = typeof addr === 'string' ? 'pipe ' + addr : 'port ' + addr.port;
-    debug('Listening on ' + bind);
+  var addr = server.address();
+  var bind = typeof addr === 'string' ? 'pipe ' + addr : 'port ' + addr.port;
+  debug('Listening on ' + bind);
 }
