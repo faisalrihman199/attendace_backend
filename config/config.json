@@ -1,0 +1,23 @@
+{
+  "development": {
+    "username": "root",
+    "password": "7Mt85xSN!",
+    "database": "attendence_system",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  },
+  "test": {
+    "username": "root",
+    "password": "7Mt85xSN!",
+    "database": "database_test",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  },
+  "production": {
+    "username": "root",
+    "password": "7Mt85xSN!",
+    "database": "database_production",
+    "host": "127.0.0.1",
+    "dialect": "mysql"
+  }
+}
