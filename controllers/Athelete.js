@@ -876,17 +876,20 @@ exports.getAthleteCheckins = async (req, res) => {
 
     // Construct search condition for athletes
     let searchCondition = {};
-    
-    searchCondition = {
-      [Op.or]: [
-        { name: { [Op.like]: `%${query}%` } },
-        { pin: query }
-      ]
-    };
+    if(query){
+      searchCondition = {
+        [Op.or]: [
+          { name: { [Op.like]: `%${query}%` } },
+          { pin: query }
+        ]
+      };
+    }
     // Use athlete group names to filter athletes if provided
-    const athleteGroupSearchCondition = query
-      ? { groupName: { [Op.like]: `%${query}%` } }
-      : {};
+    if(query){
+      const athleteGroupSearchCondition = query
+        ? { groupName: { [Op.like]: `%${query}%` } }
+        : {};
+    }
     
 
     // Construct date range condition for check-ins
@@ -1236,12 +1239,15 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     }
 
     // Further filtering by athleteName and pin if provided
-    searchCondition = {
-      [Op.or]: [
-        { name: { [Op.like]: `%${query}%` } },
-        { pin: query }
-      ]
-    };
+    if(query){
+
+      searchCondition = {
+        [Op.or]: [
+          { name: { [Op.like]: `%${query}%` } },
+          { pin: query }
+        ]
+      };
+    }
 
     // Fetch check-ins for the filtered athletes
     const checkins = await model.checkin.findAll({
