@@ -306,6 +306,7 @@ exports.getAllBusinesses = async (req, res) => {
                 photoPath: business.photoPath,
                 ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                 status: business.status,
+                trialPaid:business.trialPaid,
                 timezone: business.timezone,
                 userId: business.user.id,
                 pinLength: business.reporting.pinLength,
@@ -879,12 +880,47 @@ exports.setBusinessStatusInactive = async (req, res) => {
 
         // Toggle the business status
         business.status = business.status === 'active' ? 'inactive' : 'active';
-        const paid=business.status==='active'?'Not Paid':"Paid";
+        
         await business.save();
 
         return res.status(200).json({
             success: true,
-            message: `Business status set to ${paid} successfully.`,
+            message: `Business status set to ${business.status} successfully.`,
+            data: business,
+        });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: 'Error updating business status.',
+            error: error.message,
+        });
+    }
+};
+exports.updateTrialPaid = async (req, res) => {
+    try {
+        // Check if the user is a superAdmin
+        if (req.user.role !== 'superAdmin') {
+            return res.status(403).json({ success: false, message: "Only superAdmin can set business status." });
+        }
+        const { id } = req.params; // Get the business ID from the route parameters
+
+        // Find the business by ID
+        const business = await model.business.findByPk(id);
+
+        // Check if the business exists
+        if (!business) {
+            return res.status(404).json({ success: false, message: 'Business not found.' });
+        }
+
+        // Toggle the business status
+        business.trialPaid = business.trialPaid?false:true ;
+        
+        await business.save();
+
+        return res.status(200).json({
+            success: true,
+            message: `Business Trial set to ${business.trialPaid?'Paid':'Not Paid'} successfully.`,
             data: business,
         });
     } catch (error) {
@@ -1264,10 +1300,11 @@ exports.getBusinessNameandPhoto=async(req,res)=>{
 
 exports.getBusinessStatistics = async (req, res) => {
     try {
-      const { period, startDate, endDate } = req.query;
+      const { period } = req.query;
       const user = req.user;
       const userId = user.role === "superAdmin" ? req.query.userId : user.id;
   
+      // Fetch business
       const business = await model.business.findOne({ where: { userId } });
       if (!business) {
         return res.status(404).json({
@@ -1276,72 +1313,133 @@ exports.getBusinessStatistics = async (req, res) => {
         });
       }
   
+      // Fetch athlete groups with their athletes
       const athleteGroups = await model.AthleteGroup.findAll({
         where: { businessId: business.id },
-        include: [{ model: model.Athlete }],
+        include: [{ model: model.Athlete, attributes: ["id"] }],
       });
   
-      // Determine the date range based on the period
-      let startDateFilter, endDateFilter;
+      const groupData = [];
   
-      if (period === "weekly") {
-        const now = new Date();
-        endDateFilter = now;
-        startDateFilter = new Date();
-        startDateFilter.setDate(now.getDate() - 7); // Set start to 7 days ago
-      } else if (startDate && endDate) {
-        startDateFilter = new Date(startDate);
-        endDateFilter = new Date(endDate);
-      } else {
-        // Default to current year if no specific period is provided
-        const currentYear = new Date().getFullYear();
-        startDateFilter = new Date(`${currentYear}-01-01`);
-        endDateFilter = new Date(`${currentYear}-12-31`);
-      }
+      // Helper functions
+      function formatDateForRange(date) {
+        const month = date.getMonth() + 1; // Months are zero-based, so add 1
+        const day = date.getDate();
+        const year = date.getFullYear();
+        return `${month < 10 ? '0' + month : month}/${day < 10 ? '0' + day : day}/${year}`;
+    }
   
-      // Format logins per athlete group
-      const athleteGroupLogins = {};
-      for (const group of athleteGroups) {
-        const groupName = group.groupName;
-  
-        const loginsPerPeriod = await model.checkin.findAll({
+      const formatLogins = async (athleteIds, dateRange, format) => {
+        const logins = await model.checkin.findAll({
           attributes: [
-            [sequelize.fn(period === "weekly" ? "DAYNAME" : "MONTH", sequelize.col("createdAt")), "period"],
-            [sequelize.fn("COUNT", sequelize.col("id")), "totalLogins"],
+            [Sequelize.fn(format, Sequelize.col("createdAt")), "period"],
+            [Sequelize.fn("COUNT", Sequelize.col("id")), "totalLogins"],
           ],
           where: {
-            athleteId: {
-              [Op.in]: group.Athletes.map((athlete) => athlete.id),
-            },
-            createdAt: {
-              [Op.between]: [startDateFilter, endDateFilter],
-            },
+            athleteId: { [Op.in]: athleteIds },
+            createdAt: { [Op.between]: dateRange },
           },
-          group: [sequelize.fn(period === "weekly" ? "DAYNAME" : "MONTH", sequelize.col("createdAt"))],
+          group: [Sequelize.fn(format, Sequelize.col("createdAt"))],
         });
   
-        // Initialize the period data structure
-        const periodData = (period === "weekly"
-          ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-          : Array.from({ length: 12 }, (_, index) =>
-            new Date(2020, index).toLocaleString("default", { month: "short" })
-          )
-        ).map((name) => ({ name, value: 0 }));
+        return logins.reduce((acc, login) => {
+          acc[login.getDataValue("period")] = login.getDataValue("totalLogins");
+          return acc;
+        }, {});
+      };
   
-        // Map actual logins to the data structure
-        loginsPerPeriod.forEach((login) => {
-          const periodIndex = period === "weekly"
-            ? periodData.findIndex((item) => item.name === login.getDataValue("period"))
-            : login.getDataValue("period") - 1;
-          if (periodIndex >= 0) {
-            periodData[periodIndex].value = login.getDataValue("totalLogins");
+      const today = new Date();
+      let startDateFilter;
+      let dateFormat;
+      const formatDateForSQL = (date) =>
+        date.toISOString().slice(0, 19).replace("T", " "); 
+      if (period === "year") {
+        startDateFilter = new Date(today.getFullYear(), 0, 1);
+        dateFormat = "MONTH";
+        for (const group of athleteGroups) {
+          const athleteIds = group.Athletes.map((athlete) => athlete.id);
+          const logins = await formatLogins(athleteIds, [startDateFilter, today], dateFormat);
+  
+          const totalCheckins = Object.values(logins).reduce((sum, value) => sum + value, 0);
+          groupData.push({ name: group.groupName, value:totalCheckins });
+        }
+      } else if (period === "monthly") {
+        startDateFilter = new Date(today.getFullYear(), 0, 1);
+        dateFormat = "MONTH";
+        for (const group of athleteGroups) {
+          const athleteIds = group.Athletes.map((athlete) => athlete.id);
+          const logins = await formatLogins(athleteIds, [startDateFilter, today], dateFormat);
+  
+          const monthLogins = Array.from({ length: 12 }, (_, i) => {
+            const month = new Date(2020, i).toLocaleString("default", { month: "short" });
+            return { [month]: logins[i + 1] || 0 };
+          });
+  
+          groupData.push({ groupName: group.groupName, monthlyLogins: monthLogins });
+        }
+      } else if (period === "weekly") {
+        startDateFilter = new Date();
+        startDateFilter.setDate(today.getDate() - 28); // Last 4 weeks
+  
+        for (const group of athleteGroups) {
+          const athleteIds = group.Athletes.map((athlete) => athlete.id);
+  
+          const weeklyLogins = [];
+          for (let i = 0; i < 4; i++) {
+            const startOfWeek = new Date(startDateFilter);
+            startOfWeek.setDate(startDateFilter.getDate() + i * 7);
+  
+            const endOfWeek = new Date(startOfWeek);
+            endOfWeek.setDate(startOfWeek.getDate() + 6);
+  
+            const logins = await formatLogins(athleteIds, [startOfWeek, endOfWeek], "DAY");
+  
+            weeklyLogins.push({
+                [`${formatDateForRange(startOfWeek)} - ${formatDateForRange(endOfWeek)}`]: Object.values(logins).reduce((sum, count) => sum + count, 0),
+            });
           }
+  
+          groupData.push({ groupName: group.groupName, weeklyLogins });
+        }
+      } 
+      
+      else if (period === "daily") {
+        const startDate = new Date();
+        startDate.setDate(today.getDate() - 7); // Start from 7 days ago
+    
+        const formattedStartDate = formatDateForSQL(startDate);
+        const formattedToday = formatDateForSQL(today);
+    
+        dateFormat = "DATE"; // Group by date
+    
+        for (const group of athleteGroups) {
+            const athleteIds = group.Athletes.map((athlete) => athlete.id);
+            const logins = await formatLogins(
+                athleteIds,
+                [formattedStartDate, formattedToday],
+                dateFormat
+            );
+    
+            // Create an array of the last 7 days with default values
+            const dailyLogins = Array.from({ length: 7 }, (_, i) => {
+                const date = new Date();
+                date.setDate(today.getDate() - i);
+                const dayOfWeek = date.toLocaleDateString("en-US", { weekday: "long" }); // Get day of the week
+                const formattedDate = date.toISOString().split("T")[0]; // YYYY-MM-DD
+                return { [dayOfWeek]: logins[formattedDate] || 0 }; // Show the day of the week instead of date
+            }).reverse(); // Reverse to show oldest date first
+    
+            groupData.push({ groupName: group.groupName, dailyLogins });
+        }
+    }
+    
+      
+      else {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid period provided. Valid values are: year, monthly, weekly, daily.",
         });
-  
-        athleteGroupLogins[groupName] = periodData;
       }
-  
-      // Similar updates for business-wide logins
       const allAthletes = await model.Athlete.findAll({
         attributes: ["id"],
         include: [{
@@ -1350,39 +1448,6 @@ exports.getBusinessStatistics = async (req, res) => {
           required: true,
         }],
       });
-  
-      const totalLoginsPerPeriod = await model.checkin.findAll({
-        attributes: [
-          [sequelize.fn(period === "weekly" ? "DAYNAME" : "MONTH", sequelize.col("createdAt")), "period"],
-          [sequelize.fn("COUNT", sequelize.col("id")), "totalLogins"],
-        ],
-        where: {
-          athleteId: {
-            [Op.in]: allAthletes.map((athlete) => athlete.id),
-          },
-          createdAt: {
-            [Op.between]: [startDateFilter, endDateFilter],
-          },
-        },
-        group: [sequelize.fn(period === "weekly" ? "DAYNAME" : "MONTH", sequelize.col("createdAt"))],
-      });
-  
-      const businessTotalLogins = (period === "weekly"
-        ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        : Array.from({ length: 12 }, (_, index) =>
-          new Date(2020, index).toLocaleString("default", { month: "short" })
-        )
-      ).map((name) => ({ name, value: 0 }));
-  
-      totalLoginsPerPeriod.forEach((login) => {
-        const periodIndex = period === "weekly"
-          ? businessTotalLogins.findIndex((item) => item.name === login.getDataValue("period"))
-          : login.getDataValue("period") - 1;
-        if (periodIndex >= 0) {
-          businessTotalLogins[periodIndex].value = login.getDataValue("totalLogins");
-        }
-      });
-  
       const last3Logins = await model.checkin.findAll({
         where: {
           athleteId: {
@@ -1405,15 +1470,15 @@ exports.getBusinessStatistics = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "Business statistics fetched successfully.",
-        data: {
-          athleteGroups: athleteGroupLogins,
-          totalBusinessLoginsPerPeriod: businessTotalLogins,
-          totalAthleteGroups,
-          totalAthletes,
-          last3Logins,
-          businessName: business.name,
-          businessId: business.id,
-        },
+        data:
+        
+        {groupData,
+        totalAthleteGroups,
+        totalAthletes,
+        last3Logins,
+        businessName: business.name,
+        businessId: business.id
+        }
       });
     } catch (error) {
       console.error("Error fetching business statistics:", error);
@@ -1424,6 +1489,7 @@ exports.getBusinessStatistics = async (req, res) => {
       });
     }
   };
+  
   
   
   

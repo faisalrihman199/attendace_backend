@@ -25,6 +25,11 @@ const Business = sequelize.define('business', {
         allowNull: true, // Set to false if the timezone is required
         defaultValue: 'UTC', // Optional default value
     },
+    trialPaid: { // Add the new column
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
+    },
 }, 
 {
     

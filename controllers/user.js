@@ -239,12 +239,18 @@ exports.login = async (req, res) => {
         ? user.subscription.subscriptionStatus
         : "inactive";
       if(subscriptionStatus==='inactive'){
-        subscriptionStatus=user?.business?.status==='inactive'?'active':'inactive'
+        subscriptionStatus=user?.business?.trialPaid?'active':'inactive'
       }
         
       // Check if the user has a business
       const hasBusiness = user.business ? user.business.id : false;
-
+      if(hasBusiness){
+        if(user?.business?.status!=='active'){
+          return res.json({ success: false, message: "Business is inactive" });
+        }
+      }
+      
+      
       res.json({
         success: true,
         message: "Login successful",
