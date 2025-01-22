@@ -249,8 +249,6 @@ exports.login = async (req, res) => {
           return res.json({ success: false, message: "Business is inactive" });
         }
       }
-      
-      
       res.json({
         success: true,
         message: "Login successful",

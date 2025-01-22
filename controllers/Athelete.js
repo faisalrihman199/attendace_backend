@@ -1213,7 +1213,7 @@ exports.getAthleteCheckins = async (req, res) => {
 
 exports.getAthleteCheckinsPdf = async (req, res) => {
   try {
-    const { query,groupName } = req.query;
+    const { query,startDate,endDate } = req.query;
     const user = req.user;
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
 
@@ -1236,27 +1236,40 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
         message: "No athlete groups found for this business.",
       });
     }
-
+    const dateCondition = {};
+    if (startDate && endDate) {
+      dateCondition.checkinDate = {
+        [Op.between]: [new Date(startDate), new Date(endDate)],
+      };
+    } else if (startDate) {
+      dateCondition.checkinDate = { [Op.gte]: new Date(startDate) };
+    } else if (endDate) {
+      dateCondition.checkinDate = { [Op.lte]: new Date(endDate) };
+    }
     // Build search conditions for filtering athletes
     let searchCondition = { active: true };
-
+    let searchGroup= {businessId: business.id};
+    let isGroup=null;
     // Include athlete group filtering if groupName is provided
-    if (groupName) {
+    if (query) {
       const athleteGroupIds = await model.AthleteGroup.findAll({
-        where: { groupName: { [Op.like]: `%${groupName}%` } },
+        where: { groupName: { [Op.like]: `%${query}%` } },
         attributes: ["id"],
       }).then((groups) => groups.map((group) => group.id));
+      if(athleteGroupIds.length>0){
+        searchGroup.id=athleteGroupIds[0]
+        isGroup=athleteGroupIds[0]
+      } 
 
-      searchCondition["$AthleteGroups.id$"] = { [Op.in]: athleteGroupIds };
+      // searchCondition["$AthleteGroups.id$"] = { [Op.in]: athleteGroupIds };
     }
-
     // Fetch active athletes in the groups linked to the business
     const athleteIds = await model.Athlete.findAll({
       where: searchCondition,
       include: [
         {
           model: model.AthleteGroup,
-          where: { businessId: business.id }, // Ensure athletes are linked to this business
+          where: searchGroup, // Ensure athletes are linked to this business
           attributes: [], // Don't need group details here
           through: { attributes: [] }, // Ignore junction table attributes
         },
@@ -1272,7 +1285,7 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     }
 
     // Further filtering by athleteName and pin if provided
-    if(query){
+    if(query && !isGroup){
 
       searchCondition = {
         [Op.or]: [
@@ -1284,7 +1297,8 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
 
     // Fetch check-ins for the filtered athletes
     const checkins = await model.checkin.findAll({
-      where: { athleteId: athleteIds },
+
+      where: { athleteId: athleteIds,...dateCondition },
       include: [
         {
           model: model.Athlete,
