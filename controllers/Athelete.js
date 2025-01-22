@@ -844,7 +844,7 @@ exports.getAthleteCheckins = async (req, res) => {
       endDate,
     } = req.query;
     const offset = (page - 1) * limit;
-
+    
     // Determine userId based on role
     const user = req.user;
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
@@ -861,7 +861,7 @@ exports.getAthleteCheckins = async (req, res) => {
     // Find all athlete groups associated with the business
     const athleteGroups = await model.AthleteGroup.findAll({
       where: { businessId: business.id },
-      attributes: ["id", "groupName"],  // Include groupName for filtering
+      attributes: ["id"],
     });
 
     if (!athleteGroups || athleteGroups.length === 0) {
@@ -874,9 +874,9 @@ exports.getAthleteCheckins = async (req, res) => {
     // Extract athlete group IDs
     const athleteGroupIds = athleteGroups.map((group) => group.id);
 
-    // Construct search condition for athletes (by name and pin)
+    // Construct search condition for athletes
     let searchCondition = {};
-    if (query) {
+    if(query){
       searchCondition = {
         [Op.or]: [
           { name: { [Op.like]: `%${query}%` } },
@@ -884,14 +884,13 @@ exports.getAthleteCheckins = async (req, res) => {
         ]
       };
     }
-
-    // Construct athlete group search condition (by groupName)
-    let athleteGroupSearchCondition = {};
-    if (query) {
-      athleteGroupSearchCondition = {
-        groupName: { [Op.like]: `%${query}%` },
-      };
-    }
+    // Use athlete group names to filter athletes if provided
+   
+      const athleteGroupSearchCondition = query
+        ? { groupName: { [Op.like]: `%${query}%` } }
+        : {};
+    
+    
 
     // Construct date range condition for check-ins
     const dateCondition = {};
@@ -930,18 +929,16 @@ exports.getAthleteCheckins = async (req, res) => {
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
     });
-
-    console.log("count is ", count, checkins.length);
-
-    // If no check-ins match the search conditions, check only with athlete group search
-    if (count === 0) {
-      // Now search with groupName filter only
-      const fallbackCheckins = await model.checkin.findAndCountAll({
+    
+    // If no check-ins found, perform a second query with modified conditions
+    if (count < 1) {
+      const { count: newCount, rows: newCheckins } = await model.checkin.findAndCountAll({
         where: { ...dateCondition },
         include: [
           {
             model: model.Athlete,
             attributes: ["id", "pin", "name", "photoPath"],
+            where: {}, // You can leave it empty or modify it based on the requirements
             include: [
               {
                 model: model.AthleteGroup,
@@ -949,49 +946,25 @@ exports.getAthleteCheckins = async (req, res) => {
                 where: {
                   businessId: business.id,
                   id: { [Op.in]: athleteGroupIds },
-                  ...athleteGroupSearchCondition,  // Only search by groupName if no results found
+                  ...athleteGroupSearchCondition, // Apply additional search condition
                 },
                 through: { attributes: [] },
               },
             ],
           },
         ],
-        distinct: true,
+        distinct: true, // Ensure deduplication for count
         limit: parseInt(limit, 10),
         offset: parseInt(offset, 10),
       });
-
-      console.log("Fallback count is ", fallbackCheckins.count, fallbackCheckins.rows.length);
-
-      // If fallback data exists, return it
-      if (fallbackCheckins.count > 0) {
-        const fallbackData = fallbackCheckins.rows.map((checkin) => {
-          const athlete = checkin.Athlete;
-          const groupNames = athlete.athleteGroups.map((group) => group.groupName).join(", ");
-
-          return {
-            id: checkin.id,
-            createdAt: checkin.checkinDate,
-            checkinTime: checkin.checkinTime,
-            athlete: {
-              pin: athlete.pin,
-              name: athlete.name,
-              photoPath: athlete.photoPath || null,
-              groupNames, // Array of group names
-            },
-          };
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: "Athlete check-ins retrieved successfully (group search).",
-          data: fallbackData,
-          currentPage: parseInt(page, 10),
-          totalPages: Math.ceil(fallbackCheckins.count / limit),
-          totalCheckins: fallbackCheckins.count,
-        });
-      }
+    
+      // Update the initial variables if the second query returns results
+      count = newCount;
+      checkins = newCheckins;
     }
+    
+    console.log("count is ", count,checkins.length);
+    
 
     // Transform data to include groupNames as an array for each athlete
     const checkinData = checkins.map((checkin) => {
@@ -1012,6 +985,7 @@ exports.getAthleteCheckins = async (req, res) => {
     });
 
     console.log("checkinData is ", checkinData.length);
+    
 
     return res.status(200).json({
       success: true,
@@ -1030,8 +1004,6 @@ exports.getAthleteCheckins = async (req, res) => {
     });
   }
 };
-
-
 
 
 
