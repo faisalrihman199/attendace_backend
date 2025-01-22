@@ -1347,7 +1347,31 @@ exports.getBusinessStatistics = async (req, res) => {
           return acc;
         }, {});
       };
-  
+      const formatLoginsWeek = async (athleteIds, dateRange, format) => {
+        // Add one day to the end of the range to include the end date fully
+        const endDate = new Date(dateRange[1]);
+        endDate.setDate(endDate.getDate() + 1); // Add one day to include the full end date
+    
+        const logins = await model.checkin.findAll({
+            attributes: [
+                [Sequelize.fn("DATE", Sequelize.col("createdAt")), "period"],  // Truncate time part
+                [Sequelize.fn("COUNT", Sequelize.col("id")), "totalLogins"],
+            ],
+            where: {
+                athleteId: { [Op.in]: athleteIds },
+                createdAt: {
+                    [Op.between]: [dateRange[0], endDate.toISOString().split("T")[0]], // Adjusted to include end date
+                },
+            },
+            group: [Sequelize.fn("DATE", Sequelize.col("createdAt"))], // Group by date only
+        });
+    
+        return logins.reduce((acc, login) => {
+            acc[login.getDataValue("period")] = login.getDataValue("totalLogins");
+            return acc;
+        }, {});
+    };
+    
       const today = new Date();
       let startDateFilter;
       let dateFormat;
@@ -1377,61 +1401,75 @@ exports.getBusinessStatistics = async (req, res) => {
   
           groupData.push({ groupName: group.groupName, monthlyLogins: monthLogins });
         }
-      } else if (period === "weekly") {
-        startDateFilter = new Date();
-        startDateFilter.setDate(today.getDate() - 28); // Last 4 weeks
-  
-        for (const group of athleteGroups) {
-          const athleteIds = group.Athletes.map((athlete) => athlete.id);
-  
-          const weeklyLogins = [];
-          for (let i = 0; i < 4; i++) {
-            const startOfWeek = new Date(startDateFilter);
-            startOfWeek.setDate(startDateFilter.getDate() + i * 7);
-  
-            const endOfWeek = new Date(startOfWeek);
-            endOfWeek.setDate(startOfWeek.getDate() + 6);
-  
-            const logins = await formatLogins(athleteIds, [startOfWeek, endOfWeek], "DAY");
-  
-            weeklyLogins.push({
-                [`${formatDateForRange(startOfWeek)} - ${formatDateForRange(endOfWeek)}`]: Object.values(logins).reduce((sum, count) => sum + count, 0),
-            });
-          }
-  
-          groupData.push({ groupName: group.groupName, weeklyLogins });
-        }
-      } 
-      
-      else if (period === "daily") {
-        const startDate = new Date();
-        startDate.setDate(today.getDate() - 7); // Start from 7 days ago
-    
-        const formattedStartDate = formatDateForSQL(startDate);
-        const formattedToday = formatDateForSQL(today);
-    
-        dateFormat = "DATE"; // Group by date
+      }
+      else if (period === "weekly") {
+        const startDateFilter = new Date();
+        startDateFilter.setDate(today.getDate() - 27); // Start date 28 days ago
     
         for (const group of athleteGroups) {
             const athleteIds = group.Athletes.map((athlete) => athlete.id);
-            const logins = await formatLogins(
-                athleteIds,
-                [formattedStartDate, formattedToday],
-                dateFormat
-            );
+            const weeklyLogins = [];
     
-            // Create an array of the last 7 days with default values
-            const dailyLogins = Array.from({ length: 7 }, (_, i) => {
-                const date = new Date();
-                date.setDate(today.getDate() - i);
-                const dayOfWeek = date.toLocaleDateString("en-US", { weekday: "long" }); // Get day of the week
-                const formattedDate = date.toISOString().split("T")[0]; // YYYY-MM-DD
-                return { [dayOfWeek]: logins[formattedDate] || 0 }; // Show the day of the week instead of date
-            }).reverse(); // Reverse to show oldest date first
+            for (let i = 0; i < 4; i++) {
+                const startOfWeek = new Date(startDateFilter);
+                startOfWeek.setDate(startDateFilter.getDate() + i * 7); // Increment by 7 days for each week
+                const endOfWeek = new Date(startOfWeek);
+                endOfWeek.setDate(startOfWeek.getDate() + 6); // End of the week
     
-            groupData.push({ groupName: group.groupName, dailyLogins });
+                // Adjust the end of the week to ensure it doesn't exceed today's date
+                const adjustedEndOfWeek = endOfWeek > today ? today : endOfWeek;
+    
+                // Ensure today's data is included in the current week's logins
+                const logins = await formatLoginsWeek(
+                    athleteIds,
+                    [startOfWeek.toISOString().split("T")[0], adjustedEndOfWeek.toISOString().split("T")[0]],
+                    "DAY"
+                );
+    
+                weeklyLogins.push({
+                    [`${formatDateForRange(startOfWeek)} - ${formatDateForRange(adjustedEndOfWeek)}`]: Object.values(logins).reduce(
+                        (sum, count) => sum + count,
+                        0
+                    ),
+                });
+            }
+    
+            groupData.push({ groupName: group.groupName, weeklyLogins });
         }
     }
+    
+    
+      else if (period === "daily") {
+        const formattedToday = today.toISOString().split("T")[0]; // Get today's date in YYYY-MM-DD format
+    
+        for (const group of athleteGroups) {
+            const athleteIds = group.Athletes.map((athlete) => athlete.id);
+    
+            // Fetch logins for today, matching only the date
+            const logins = await model.checkin.findAll({
+                attributes: [
+                    [Sequelize.fn("DATE", Sequelize.col("createdAt")), "date"], // Extract date only
+                    [Sequelize.fn("COUNT", Sequelize.col("id")), "totalLogins"] // Count logins
+                ],
+                where: {
+                    athleteId: { [Op.in]: athleteIds },
+                    [Op.and]: Sequelize.where(Sequelize.fn("DATE", Sequelize.col("createdAt")), formattedToday) // Compare only the date
+                },
+                group: [Sequelize.fn("DATE", Sequelize.col("createdAt"))]
+            });
+    
+            // Prepare response
+            const totalLogins = logins.length > 0 ? logins[0].getDataValue("totalLogins") : 0;
+            const dayOfWeek = today.toLocaleDateString("en-US", { weekday: "long" });
+            const dayDate = `${dayOfWeek}`;
+    
+            groupData.push({ groupName: group.groupName, dailyLogins: [{ [dayDate]: totalLogins }] });
+        }
+    }
+    
+    
+    
+    
     
       
       else {
