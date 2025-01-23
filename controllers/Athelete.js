@@ -254,10 +254,11 @@ exports.createAthlete = async (req, res) => {
         .replace(/{{pin}}/g, pin)
         .replace(/{{description}}/g, description || "No description provided.")  // If empty, default to "No description provided"
         .replace(/{{qrCodeImage}}/g, "cid:qrcodeImage"); // Embed QR code image as an attachment
-
+      const subject =emailTemplate.subject
+      .replace(/{{athleteName}}/g, name)
       const mailOptions = {
         to: email,
-        subject: emailTemplate.subject,
+        subject: subject,
         html: finalHtmlContent,
         attachments: [
           {
@@ -437,11 +438,12 @@ exports.checkInByPin = async (req, res) => {
         .replace(/{{checkinDate}}/g, checkinDate)
         .replace(/{{checkinTime}}/g, checkinTime)
         .replace(/{{businessName}}/g, business.name);
-
+      const subject=emailTemplate.subject
+      .replace(/{{athleteName}}/g, athlete.name)
       // Send the email
       const emailOptions = {
         to: athlete.email,
-        subject: emailTemplate.subject,
+        subject: subject,
         html: emailContent,
       };
       await sendEmail(emailOptions);
@@ -1297,7 +1299,6 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
 
     // Fetch check-ins for the filtered athletes
     const checkins = await model.checkin.findAll({
-
       where: { athleteId: athleteIds,...dateCondition },
       include: [
         {
