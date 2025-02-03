@@ -187,9 +187,13 @@ exports.createAthlete = async (req, res) => {
         where: { id: { [Op.in]: athleteGroupIdsArray } },
         required: false,
       },
-    });
-
-    if (athlete) {
+    });    
+    const savedBusiness = 
+    athlete?.athleteGroups?.[0]?.businessId !== undefined &&
+    business.id === athlete.athleteGroups[0].businessId;
+    
+    
+    if (athlete && savedBusiness) {
       // Handle existing athlete
       if (req.file && athlete.photoPath) {
         const oldImagePath = path.join(
@@ -201,7 +205,6 @@ exports.createAthlete = async (req, res) => {
           if (err) console.error("Error deleting old image:", err);
         });
       }
-
       athlete = await athlete.update({
         name,
         dateOfBirth,
@@ -209,10 +212,8 @@ exports.createAthlete = async (req, res) => {
         description,
         active: active !== undefined ? active : athlete.active,
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : athlete.photoPath,
-      });
-
+      });      
       await athlete.setAthleteGroups(athleteGroupIds);
-
       return res.status(200).json({
         success: true,
         message: "Athlete updated successfully.",
