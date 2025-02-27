@@ -10,6 +10,7 @@ const { paymentHistory } = require("../models");
 const fs = require("fs");
 const path = require("path");
 const sequelize = require("../config/db"); // Adjust the path as necessary
+const { Op } = require('sequelize');
 
 require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
@@ -1057,33 +1058,42 @@ exports.getPaymentHistory = async (req, res) => {
     const user = req.user; // Get the authenticated user
     const userId = user.role === "superAdmin" ? req.query.userId : user.id; // Determine the userId
 
-    const { page = 1, limit = 5 } = req.query; // Get pagination parameters, default to page 1 and limit 6
+    const { page = 1, limit = 5 } = req.query; // Get pagination parameters
     const offset = (page - 1) * limit; // Calculate offset for pagination
 
-    // Fetch the subscription associated with the user
-    const subscription = await model.subscription.findOne({
+    // Fetch all subscriptions associated with the user
+    const subscriptions = await model.subscription.findAll({
       where: { userId },
     });
 
-    if (!subscription) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "No subscription found for this user.",
-        });
+    if (!subscriptions || subscriptions.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No subscriptions found for this user.",
+      });
     }
 
-    // Fetch payment history associated with the user's subscription
+    // Extract subscription IDs
+    const subscriptionIds = subscriptions.map(sub => sub.id);
+
+    // Fetch payment histories associated with these subscriptions using pagination
     const paymentHistory = await model.paymentHistory.findAll({
-      where: { subscriptionId: subscription.id }, // Assuming payment history has subscriptionId
-      limit: parseInt(limit, 10), // Limit items per page
-      offset: parseInt(offset, 10), // Offset for pagination
+      where: {
+        subscriptionId: {
+          [Op.in]: subscriptionIds,
+        },
+      },
+      limit: parseInt(limit, 10),
+      offset: parseInt(offset, 10),
     });
 
     // Get the total count of payment histories for pagination
     const totalCount = await model.paymentHistory.count({
-      where: { subscriptionId: subscription.id },
+      where: {
+        subscriptionId: {
+          [Op.in]: subscriptionIds,
+        },
+      },
     });
 
     // Prepare the response
@@ -1289,10 +1299,10 @@ exports.getUserCards = async (req, res) => {
       userId = req.query.userId;
     }
     const customerData = await model.subscription.findOne({
-      where: {
-        userId,
-      },
+      where: { userId },
+      order: [['createdAt', 'DESC']], // or order by [['id', 'DESC']]
     });
+    
     if (!customerData) {
       return res
         .status(404)
