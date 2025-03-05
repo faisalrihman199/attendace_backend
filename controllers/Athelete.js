@@ -13,6 +13,8 @@ const PDFDocument = require("pdfkit");
 const cron = require("node-cron");
 const moment = require("moment");
 const mmt = require("moment-timezone");
+const { Parser } = require("json2csv");
+const ExcelJS = require("exceljs");
 
 const { parse } = require("csv-parse"); // For parsing CSV files
 const xlsx = require("xlsx"); // For parsing Excel files
@@ -160,7 +162,7 @@ exports.createAthlete = async (req, res) => {
     } else {
       athleteGroupIds = athleteGroupIds.map(id => parseInt(id, 10));
     }
-    
+
     if (dateOfBirth) {
       const parsedDate = new Date(dateOfBirth);
       if (!isNaN(parsedDate)) {
@@ -187,12 +189,12 @@ exports.createAthlete = async (req, res) => {
         where: { id: { [Op.in]: athleteGroupIdsArray } },
         required: false,
       },
-    });    
-    const savedBusiness = 
-    athlete?.athleteGroups?.[0]?.businessId !== undefined &&
-    business.id === athlete.athleteGroups[0].businessId;
-    
-    
+    });
+    const savedBusiness =
+      athlete?.athleteGroups?.[0]?.businessId !== undefined &&
+      business.id === athlete.athleteGroups[0].businessId;
+
+
     if (athlete && savedBusiness) {
       // Handle existing athlete
       if (req.file && athlete.photoPath) {
@@ -212,7 +214,7 @@ exports.createAthlete = async (req, res) => {
         description,
         active: active !== undefined ? active : athlete.active,
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : athlete.photoPath,
-      });      
+      });
       await athlete.setAthleteGroups(athleteGroupIds);
       return res.status(200).json({
         success: true,
@@ -255,8 +257,8 @@ exports.createAthlete = async (req, res) => {
         .replace(/{{pin}}/g, pin)
         .replace(/{{description}}/g, description || "No description provided.")  // If empty, default to "No description provided"
         .replace(/{{qrCodeImage}}/g, "cid:qrcodeImage"); // Embed QR code image as an attachment
-      const subject =emailTemplate.subject
-      .replace(/{{athleteName}}/g, name)
+      const subject = emailTemplate.subject
+        .replace(/{{athleteName}}/g, name)
       const mailOptions = {
         to: email,
         subject: subject,
@@ -289,6 +291,81 @@ exports.createAthlete = async (req, res) => {
   }
 };
 
+exports.sendWelcomeEmail = async (req, res) => {
+  try {
+    const athleteId = req.query.id;
+    if (!athleteId) {
+      return res.status(400).json({
+        success: false,
+        message: "Athlete id (id) is required in query.",
+      });
+    }
+
+    // Fetch the athlete details from the database
+    const athlete = await model.Athlete.findOne({ where: { id: athleteId } });
+    if (!athlete) {
+      return res.status(404).json({
+        success: false,
+        message: "Athlete not found.",
+      });
+    }
+
+    const { name, dateOfBirth, pin, email, description } = athlete;
+
+    // Generate QR Code for the athlete's pin
+    const qrCodeResponse = await axios.get(
+      `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(pin)}&size=256x256`,
+      { responseType: "arraybuffer" }
+    );
+
+    // Fetch the email template from the database
+    const emailTemplate = await model.emailTemplate.findOne({ where: { name: "welcome_athlete" } });
+    if (!emailTemplate) {
+      return res.status(404).json({
+        success: false,
+        message: "Email template not found.",
+      });
+    }
+
+    // Replace placeholders in the email template with actual values
+    const finalHtmlContent = emailTemplate.htmlContent
+      .replace(/{{athleteName}}/g, name)
+      .replace(/{{dateOfBirth}}/g, dateOfBirth || "N/A")
+      .replace(/{{pin}}/g, pin)
+      .replace(/{{description}}/g, description || "No description provided.")
+      .replace(/{{qrCodeImage}}/g, "cid:qrcodeImage");
+
+    const subject = emailTemplate.subject.replace(/{{athleteName}}/g, name);
+
+    const mailOptions = {
+      to: email,
+      subject: subject,
+      html: finalHtmlContent,
+      attachments: [
+        {
+          filename: "qrcode.png",
+          content: qrCodeResponse.data,
+          contentType: "image/png",
+          cid: "qrcodeImage", // Matches the cid in the HTML content
+        },
+      ],
+    };
+
+    await sendEmail(mailOptions);
+
+    return res.status(200).json({
+      success: true,
+      message: "Welcome email sent successfully.",
+    });
+  } catch (error) {
+    console.error("Error sending welcome email:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while sending the welcome email.",
+      error: error.message,
+    });
+  }
+};
 
 
 
@@ -359,7 +436,7 @@ exports.deleteAthlete = async (req, res) => {
   }
 };
 
- 
+
 
 exports.checkInByPin = async (req, res) => {
   try {
@@ -439,8 +516,8 @@ exports.checkInByPin = async (req, res) => {
         .replace(/{{checkinDate}}/g, checkinDate)
         .replace(/{{checkinTime}}/g, checkinTime)
         .replace(/{{businessName}}/g, business.name);
-      const subject=emailTemplate.subject
-      .replace(/{{athleteName}}/g, athlete.name)
+      const subject = emailTemplate.subject
+        .replace(/{{athleteName}}/g, athlete.name)
       // Send the email
       const emailOptions = {
         to: athlete.email,
@@ -470,92 +547,6 @@ exports.checkInByPin = async (req, res) => {
     });
   }
 };
-
-
-// all thelete with seperate group name
-// exports.getAllAthletes = async (req, res) => {
-//   try {
-//     const user = req.user;
-//     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
-//     const {
-//       page = 1,
-//       limit = 10,
-//       athleteName,
-//       groupName,
-//       athleteId,
-//     } = req.query; // Extract search parameters
-//     const offset = (page - 1) * limit;
-
-//     // Find the business associated with the userId
-//     const business = await model.business.findOne({ where: { userId } });
-//     if (!business) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Business not found for the provided user.",
-//       });
-//     }
-
-//     // Build the where clause for Athlete
-//     const athleteWhereClause = {};
-//     if (athleteName) {
-//       athleteWhereClause.name = { [Op.like]: `%${athleteName}%` }; // Search for name containing athleteName
-//     }
-//     if (athleteId) {
-//       athleteWhereClause.pin = athleteId; // Match exact athleteId
-//     }
-
-//     // Build the where clause for AthleteGroup
-//     const groupWhereClause = { businessId: business.id }; // Always filter by businessId
-//     if (groupName) {
-//       groupWhereClause.groupName = { [Op.like]: `%${groupName}%` }; // Search for name containing groupName
-//     }
-
-//     // Fetch athletes with filtering, pagination, and join on AthleteGroups
-//     const { count, rows: athletes } = await model.Athlete.findAndCountAll({
-//       where: athleteWhereClause,
-//       include: [
-//         {
-//           model: model.AthleteGroup,
-//           where: groupWhereClause,
-//           attributes: ["groupName"],
-//           through: { attributes: [] }, // Exclude through table attributes
-//         },
-//       ],
-//       limit: parseInt(limit, 10),
-//       offset: parseInt(offset, 10),
-//     });
-//     console.log("athletes are ", athletes);
-    
-//     // Transform athletes to include a separate entry for each athlete group
-//     const athletesWithGroupNames = athletes.flatMap((athlete) =>
-//       athlete.athleteGroups.map((group) => ({
-//         ...athlete.dataValues,
-//         athleteGroup: { groupName: group.groupName }, // Maintain groupName format
-//       }))
-//     );
-
-//     // Prepare the response with pagination details
-//     const response = {
-//       success: true,
-//       message: "Athletes retrieved successfully.",
-//       data: {
-//         totalItems: count,
-//         totalPages: Math.ceil(count / limit),
-//         currentPage: parseInt(page, 10),
-//         athletes: athletesWithGroupNames,
-//       },
-//     };
-
-//     return res.status(200).json(response);
-//   } catch (error) {
-//     console.error("Error retrieving athletes:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: "An error occurred while retrieving athletes.",
-//       error: error.message,
-//     });
-//   }
-// };
 
 
 exports.getAllAthletes = async (req, res) => {
@@ -699,144 +690,6 @@ exports.getAllAthletes = async (req, res) => {
 };
 
 
-
-
-
-
-// exports.getAthleteCheckins = async (req, res) => {
-//   try {
-//     const {
-//       page = 1,
-//       limit = 10,
-//       athleteName,
-//       pin,
-//       groupName,
-//       startDate,
-//       endDate,
-//     } = req.query;
-//     const offset = (page - 1) * limit;
-
-//     // Determine userId based on role
-//     const user = req.user;
-//     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
-
-//     // Fetch business for the user
-//     const business = await model.business.findOne({ where: { userId } });
-//     if (!business) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Business not found for the provided user.",
-//       });
-//     }
-
-//     // Find all athlete groups associated with the business
-//     const athleteGroups = await model.AthleteGroup.findAll({
-//       where: { businessId: business.id },
-//       attributes: ['id'],  // Get only the IDs of the athlete groups
-//     });
-
-//     console.log("athleteGroups are ", athleteGroups);
-
-//     if (!athleteGroups || athleteGroups.length === 0) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "No athlete groups found for this business.",
-//       });
-//     }
-
-//     // Extract athlete group IDs
-//     const athleteGroupIds = athleteGroups.map(group => group.id);
-//     console.log("athleteGroupIds are ", athleteGroupIds);
-
-//     // Construct search condition for athletes
-//     const searchCondition = {};
-//     if (athleteName) {
-//       searchCondition.name = { [Op.like]: `%${athleteName}%` }; // Search by athlete name
-//     }
-//     if (pin) {
-//       searchCondition.pin = pin; // Search by pin
-//     }
-
-//     // Use athlete group names to filter athletes if provided
-//     const athleteGroupSearchCondition = groupName
-//       ? { groupName: { [Op.like]: `%${groupName}%` } }
-//       : {};
-
-//     // Construct date range condition for check-ins
-//     const dateCondition = {};
-//     if (startDate && endDate) {
-//       dateCondition.checkinDate = {
-//         [Op.between]: [new Date(startDate), new Date(endDate)],
-//       };
-//     } else if (startDate) {
-//       dateCondition.checkinDate = { [Op.gte]: new Date(startDate) };
-//     } else if (endDate) {
-//       dateCondition.checkinDate = { [Op.lte]: new Date(endDate) };
-//     }
-//     console.log("date condition is ", dateCondition);
-    
-//     // Fetch check-ins for the athletes, ensuring they belong to the business's groups
-//     const { count, rows: checkins } = await model.checkin.findAndCountAll({
-//       where: {
-//         ...dateCondition, // Apply date range condition here
-//       },
-//       include: [
-//         {
-//           model: model.Athlete,
-//           attributes: ["id", "pin", "name", "photoPath"],
-//           where: searchCondition, // Apply search conditions for athletes
-//           include: [
-//             {
-//               model: model.AthleteGroup,
-//               attributes: ["groupName", "businessId"], // Include group name for filtering
-//               where: {
-//                 businessId: business.id, // Filter by businessId in the athlete's group
-//                 id: { [Op.in]: athleteGroupIds }, // Filter athlete groups by the business's groups
-//                 ...athleteGroupSearchCondition, // Apply additional group name filter if provided
-//               },
-//               through: { attributes: [] }, // Ensure it's a many-to-many relationship
-//             },
-//           ],
-//         },
-//       ],
-//       limit: parseInt(limit, 10),
-//       offset: parseInt(offset, 10),
-//     });
-//     console.log("checkins are ", checkins);
-    
-//     // Prepare the data to include athlete pin, name, group name, check-in time, and date
-//     const checkinData = checkins.flatMap((checkin) =>
-//       checkin.Athlete.athleteGroups.map((group) => ({
-//         id: checkin.id,
-//         createdAt: checkin.checkinDate, // Check-in date
-//         checkinTime: checkin.checkinTime, // Adjust if there's a separate time field
-//         athlete: {
-//           pin: checkin.Athlete.pin,
-//           name: checkin.Athlete.name,
-//           groupName: group.groupName || null, // Group name if available
-//           photoPath: checkin.Athlete.photoPath || null, // Photo path if available
-//         },
-//       }))
-//     );
-
-//     return res.status(200).json({
-//       success: true,
-//       message: "Active athlete check-ins retrieved successfully.",
-//       data: checkinData,
-//       currentPage: parseInt(page, 10),
-//       totalPages: Math.ceil(count / limit),
-//       totalCheckins: count,
-//     });
-//   } catch (error) {
-//     console.error("Error fetching active athlete check-ins:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: "An error occurred while fetching active athlete check-ins.",
-//       error: error.message,
-//     });
-//   }
-// };
-
 exports.getAthleteCheckins = async (req, res) => {
   try {
     const {
@@ -847,7 +700,7 @@ exports.getAthleteCheckins = async (req, res) => {
       endDate,
     } = req.query;
     const offset = (page - 1) * limit;
-    
+
     // Determine userId based on role
     const user = req.user;
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
@@ -879,7 +732,7 @@ exports.getAthleteCheckins = async (req, res) => {
 
     // Construct search condition for athletes
     let searchCondition = {};
-    if(query){
+    if (query) {
       searchCondition = {
         [Op.or]: [
           { name: { [Op.like]: `%${query}%` } },
@@ -888,12 +741,12 @@ exports.getAthleteCheckins = async (req, res) => {
       };
     }
     // Use athlete group names to filter athletes if provided
-   
-      const athleteGroupSearchCondition = query
-        ? { groupName: { [Op.like]: `%${query}%` } }
-        : {};
-    
-    
+
+    const athleteGroupSearchCondition = query
+      ? { groupName: { [Op.like]: `%${query}%` } }
+      : {};
+
+
 
     // Construct date range condition for check-ins
     const dateCondition = {};
@@ -932,7 +785,7 @@ exports.getAthleteCheckins = async (req, res) => {
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
     });
-    
+
     // If no check-ins found, perform a second query with modified conditions
     if (count < 1) {
       const { count: newCount, rows: newCheckins } = await model.checkin.findAndCountAll({
@@ -960,14 +813,14 @@ exports.getAthleteCheckins = async (req, res) => {
         limit: parseInt(limit, 10),
         offset: parseInt(offset, 10),
       });
-    
+
       // Update the initial variables if the second query returns results
       count = newCount;
       checkins = newCheckins;
     }
-    
-    console.log("count is ", count,checkins.length);
-    
+
+    console.log("count is ", count, checkins.length);
+
 
     // Transform data to include groupNames as an array for each athlete
     const checkinData = checkins.map((checkin) => {
@@ -988,7 +841,7 @@ exports.getAthleteCheckins = async (req, res) => {
     });
 
     console.log("checkinData is ", checkinData.length);
-    
+
 
     return res.status(200).json({
       success: true,
@@ -1008,215 +861,9 @@ exports.getAthleteCheckins = async (req, res) => {
   }
 };
 
-
-
-
-
-
-// exports.getAthleteCheckinsPdf = async (req, res) => {
-//   try {
-//     const { athleteName, pin, groupName } = req.query;
-//     const user = req.user;
-//     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
-
-//     // Fetch the associated business
-//     const business = await model.business.findOne({ where: { userId } });
-//     if (!business) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Business not found for the provided user.",
-//       });
-//     }
-
-//     // Get athlete groups associated with the business
-//     const athleteGroups = await model.AthleteGroup.findAll({
-//       where: { businessId: business.id },
-//     });
-//     if (!athleteGroups.length) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "No athlete groups found for this business.",
-//       });
-//     }
-
-//     // Build search conditions for filtering athletes
-//     const searchCondition = {
-//       active: true,
-//     };
-
-//     // Include athlete group filtering if groupName is provided
-//     if (groupName) {
-//       const athleteGroupIds = await model.AthleteGroup.findAll({
-//         where: { groupName: { [Op.like]: `%${groupName}%` } },
-//         attributes: ["id"],
-//       }).then((groups) => groups.map((group) => group.id));
-
-//       searchCondition['$AthleteGroups.id$'] = { [Op.in]: athleteGroupIds };
-//     }
-
-//     // Fetch active athletes in the groups linked to the business
-//     const athleteIds = await model.Athlete.findAll({
-//       where: searchCondition,
-//       include: [
-//         {
-//           model: model.AthleteGroup,
-//           where: { businessId: business.id }, // Ensure athletes are linked to this business
-//           attributes: [], // Don't need group details here
-//           through: { attributes: [] }, // Ignore junction table attributes
-//         },
-//       ],
-//       attributes: ['id'],
-//     }).then((athletes) => athletes.map((athlete) => athlete.id));
-
-//     if (athleteIds.length === 0) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "No active athletes found in the associated athlete groups.",
-//       });
-//     }
-
-//     // Further filtering by athleteName and pin if provided
-//     if (athleteName) {
-//       searchCondition.name = { [Op.like]: `%${athleteName}%` };
-//     }
-//     if (pin) {
-//       searchCondition.pin = pin;
-//     }
-
-//     // Fetch check-ins for the filtered athletes
-//     const checkins = await model.checkin.findAll({
-//       where: { athleteId: athleteIds },
-//       include: [
-//         {
-//           model: model.Athlete,
-//           attributes: ["id", "pin", "name"],
-//           where: searchCondition,
-//           include: [
-//             {
-//               model: model.AthleteGroup,
-//               attributes: ["groupName"],
-//             },
-//           ],
-//         },
-//       ],
-//     });
-
-//     if (checkins.length === 0) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "No check-ins found for the given criteria.",
-//       });
-//     }
-
-//     // Create PDF
-//     const doc = new PDFDocument();
-//     const filename = `athlete_checkins_${Date.now()}.pdf`;
-//     res.setHeader("Content-disposition", `attachment; filename=${filename}`);
-//     res.setHeader("Content-type", "application/pdf");
-//     doc.pipe(res);
-
-//     // Title
-//     doc.fontSize(20).text("Athlete Check-ins", { align: "center" });
-//     doc.moveDown();
-
-//     // Table headers and columns with borders
-//     const headers = [
-//       "S.No",
-//       "Athlete Name",
-//       "Athlete Id",
-//       "Group Name",
-//       "Check-in Date",
-//       "Check-in Time",
-//     ];
-//     const columnWidths = [50, 150, 100, 100, 100, 100];
-//     const startX = 7;
-//     let currentY = doc.y;
-
-//     // Draw headers with background color and bold text
-//     headers.forEach((header, i) => {
-//       // Draw background for header
-//       doc
-//         .rect(
-//           startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0),
-//           currentY,
-//           columnWidths[i],
-//           20
-//         )
-//         .fillAndStroke("#d0f0c0", "black") // Light green fill with black border
-//         .lineWidth(1)
-//         .stroke();
-
-//       // Add header text
-//       doc
-//         .font("Helvetica-Bold")
-//         .fontSize(12)
-//         .fillColor("black")
-//         .text(
-//           header,
-//           startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0) + 5,
-//           currentY + 5,
-//           {
-//             width: columnWidths[i] - 10,
-//             align: "center",
-//           }
-//         );
-//     });
-//     currentY += 20;
-
-//     // Draw table rows with borders
-//     checkins.forEach((checkin, index) => {
-//       const athlete = checkin.Athlete;
-//       const checkinDate = new Date(checkin.checkinDate).toLocaleDateString();
-//       const checkinTime = checkin.checkinTime;
-//       const row = [
-//         index + 1,
-//         athlete.name,
-//         athlete.pin,
-//         athlete.athleteGroups[0]?.groupName || "N/A", // Fix here: athleteGroups should be plural
-//         checkinDate,
-//         checkinTime,
-//       ];
-
-//       row.forEach((data, i) => {
-//         doc
-//           .rect(
-//             startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0),
-//             currentY,
-//             columnWidths[i],
-//             20
-//           )
-//           .strokeColor("black")
-//           .lineWidth(1)
-//           .stroke()
-//           .font("Helvetica")
-//           .fontSize(10)
-//           .text(
-//             data,
-//             startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0) + 5,
-//             currentY + 5,
-//             {
-//               width: columnWidths[i] - 10,
-//               align: "center",
-//             }
-//           );
-//       });
-//       currentY += 20;
-//     });
-
-//     doc.end();
-//   } catch (error) {
-//     console.error("Error fetching active athlete check-ins:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: "An error occurred while fetching active athlete check-ins.",
-//       error: error.message,
-//     });
-//   }
-// };
-
-exports.getAthleteCheckinsPdf = async (req, res) => {
+exports.exportCheckins = async (req, res) => {
   try {
-    const { query,startDate,endDate } = req.query;
+    const { query, startDate, endDate, format } = req.query;
     const user = req.user;
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
 
@@ -1239,6 +886,8 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
         message: "No athlete groups found for this business.",
       });
     }
+
+    // Date condition for filtering check-ins
     const dateCondition = {};
     if (startDate && endDate) {
       dateCondition.checkinDate = {
@@ -1249,22 +898,21 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     } else if (endDate) {
       dateCondition.checkinDate = { [Op.lte]: new Date(endDate) };
     }
+
     // Build search conditions for filtering athletes
     let searchCondition = { active: true };
-    let searchGroup= {businessId: business.id};
-    let isGroup=null;
+    let searchGroup = { businessId: business.id };
+    let isGroup = null;
     // Include athlete group filtering if groupName is provided
     if (query) {
       const athleteGroupIds = await model.AthleteGroup.findAll({
         where: { groupName: { [Op.like]: `%${query}%` } },
         attributes: ["id"],
       }).then((groups) => groups.map((group) => group.id));
-      if(athleteGroupIds.length>0){
-        searchGroup.id=athleteGroupIds[0]
-        isGroup=athleteGroupIds[0]
-      } 
-
-      // searchCondition["$AthleteGroups.id$"] = { [Op.in]: athleteGroupIds };
+      if (athleteGroupIds.length > 0) {
+        searchGroup.id = athleteGroupIds[0];
+        isGroup = athleteGroupIds[0];
+      }
     }
     // Fetch active athletes in the groups linked to the business
     const athleteIds = await model.Athlete.findAll({
@@ -1283,24 +931,24 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     if (athleteIds.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "No active athletes found in the associated athlete groups.",
+        message:
+          "No active athletes found in the associated athlete groups.",
       });
     }
 
     // Further filtering by athleteName and pin if provided
-    if(query && !isGroup){
-
+    if (query && !isGroup) {
       searchCondition = {
         [Op.or]: [
           { name: { [Op.like]: `%${query}%` } },
-          { pin: query }
-        ]
+          { pin: query },
+        ],
       };
     }
 
     // Fetch check-ins for the filtered athletes
     const checkins = await model.checkin.findAll({
-      where: { athleteId: athleteIds,...dateCondition },
+      where: { athleteId: athleteIds, ...dateCondition },
       include: [
         {
           model: model.Athlete,
@@ -1324,7 +972,85 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
       });
     }
 
-    // Create PDF
+    // Prepare data in tabular form with required columns
+    const data = checkins.map((checkin, index) => {
+      const athlete = checkin.Athlete;
+      const checkinDate = new Date(checkin.checkinDate).toLocaleDateString();
+      const checkinTime = checkin.checkinTime;
+      const groupNames = athlete.athleteGroups
+        .map((group) => group.groupName)
+        .join(", ");
+      return {
+        "S.No": index + 1,
+        "Athlete Name": athlete.name,
+        "Athlete Id": athlete.pin,
+        "Group Names": groupNames,
+        "Check-in Date": checkinDate,
+        "Check-in Time": checkinTime,
+      };
+    });
+
+    // Export as CSV (plain text)
+    if (format === "csv") {
+      const fields = [
+        "S.No",
+        "Athlete Name",
+        "Athlete Id",
+        "Group Names",
+        "Check-in Date",
+        "Check-in Time",
+      ];
+      const parser = new Parser({ fields });
+      const csv = parser.parse(data);
+      res.setHeader(
+        "Content-disposition",
+        `attachment; filename=athlete_checkins_${Date.now()}.csv`
+      );
+      res.setHeader("Content-type", "text/csv");
+      return res.send(csv);
+    }
+
+    // Export as Excel with styled header row
+    if (format === "excel") {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Athlete Check-ins");
+      
+      // Define columns
+      worksheet.columns = [
+        { header: "S.No", key: "S.No", width: 10 },
+        { header: "Athlete Name", key: "Athlete Name", width: 20 },
+        { header: "Athlete Id", key: "Athlete Id", width: 15 },
+        { header: "Group Names", key: "Group Names", width: 30 },
+        { header: "Check-in Date", key: "Check-in Date", width: 15 },
+        { header: "Check-in Time", key: "Check-in Time", width: 15 },
+      ];
+      
+      // Style header row: bold text and a very light green background
+      worksheet.getRow(1).eachCell((cell) => {
+        cell.font = { bold: true };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFD0F0C0" },
+        };
+      });
+      
+      // Add data rows
+      worksheet.addRows(data);
+      
+      res.setHeader(
+        "Content-disposition",
+        `attachment; filename=athlete_checkins_${Date.now()}.xlsx`
+      );
+      res.setHeader(
+        "Content-type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      await workbook.xlsx.write(res);
+      return res.end();
+    }
+    
+    // Default: Export as PDF with table pagination
     const doc = new PDFDocument();
     const filename = `athlete_checkins_${Date.now()}.pdf`;
     res.setHeader("Content-disposition", `attachment; filename=${filename}`);
@@ -1335,8 +1061,8 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     doc.fontSize(20).text("Athlete Check-ins", { align: "center" });
     doc.moveDown();
 
-    // Table headers and columns
-    const headers = [
+    // Table headers and columns configuration
+    const tableHeaders = [
       "S.No",
       "Athlete Name",
       "Athlete Id",
@@ -1347,74 +1073,79 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     const columnWidths = [40, 120, 80, 160, 100, 100];
     const startX = 7;
     let currentY = doc.y;
+    const headerHeight = 30; // increased header height for PDF
 
-    // Draw headers
-    headers.forEach((header, i) => {
+    // Function to check if a new page is needed and re-draw header
+    function checkAndAddPage(rowHeight) {
+      if (currentY + rowHeight > doc.page.height - doc.page.margins.bottom) {
+        doc.addPage();
+        currentY = doc.y;
+        // Re-draw header on new page
+        tableHeaders.forEach((header, i) => {
+          const x = startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0);
+          doc
+            .rect(x, currentY, columnWidths[i], headerHeight)
+            .fillAndStroke("#d0f0c0", "black")
+            .lineWidth(1)
+            .stroke();
+          doc
+            .font("Helvetica-Bold")
+            .fontSize(12)
+            .fillColor("black")
+            .text(header, x + 5, currentY + 10, {
+              width: columnWidths[i] - 10,
+              align: "center",
+            });
+        });
+        currentY += headerHeight;
+      }
+    }
+
+    // Draw header on first page
+    tableHeaders.forEach((header, i) => {
+      const x = startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0);
       doc
-        .rect(
-          startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0),
-          currentY,
-          columnWidths[i],
-          20
-        )
+        .rect(x, currentY, columnWidths[i], headerHeight)
         .fillAndStroke("#d0f0c0", "black")
         .lineWidth(1)
         .stroke();
-
       doc
         .font("Helvetica-Bold")
         .fontSize(12)
         .fillColor("black")
-        .text(
-          header,
-          startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0) + 5,
-          currentY + 5,
-          {
-            width: columnWidths[i] - 10,
-            align: "center",
-          }
-        );
+        .text(header, x + 5, currentY + 10, {
+          width: columnWidths[i] - 10,
+          align: "center",
+        });
     });
-    currentY += 20;
+    currentY += headerHeight;
 
-    // Draw table rows
-    checkins.forEach((checkin, index) => {
-      const athlete = checkin.Athlete;
-      const checkinDate = new Date(checkin.checkinDate).toLocaleDateString();
-      const checkinTime = checkin.checkinTime;
-      const groupNames = athlete.athleteGroups.map((group) => group.groupName);
-
-      const row = [
-        index + 1,
-        athlete.name,
-        athlete.pin,
-        groupNames.join(", "), // Join group names into a string
-        checkinDate,
-        checkinTime,
+    // Draw table rows with pagination check
+    data.forEach((row) => {
+      // Check if new page is needed before drawing the row (row height is 20)
+      checkAndAddPage(20);
+      const rowData = [
+        row["S.No"],
+        row["Athlete Name"],
+        row["Athlete Id"],
+        row["Group Names"],
+        row["Check-in Date"],
+        row["Check-in Time"],
       ];
-
-      row.forEach((data, i) => {
+      rowData.forEach((cell, i) => {
+        const x = startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0);
         doc
-          .rect(
-            startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0),
-            currentY,
-            columnWidths[i],
-            20
-          )
+          .rect(x, currentY, columnWidths[i], 20)
           .strokeColor("black")
           .lineWidth(1)
-          .stroke()
+          .stroke();
+        doc
           .font("Helvetica")
           .fontSize(10)
-          .text(
-            data,
-            startX + columnWidths.slice(0, i).reduce((a, b) => a + b, 0) + 5,
-            currentY + 5,
-            {
-              width: columnWidths[i] - 10,
-              align: "center",
-            }
-          );
+          .text(cell, x + 5, currentY + 5, {
+            width: columnWidths[i] - 10,
+            align: "center",
+          });
       });
       currentY += 20;
     });
@@ -1424,11 +1155,13 @@ exports.getAthleteCheckinsPdf = async (req, res) => {
     console.error("Error fetching active athlete check-ins:", error);
     return res.status(500).json({
       success: false,
-      message: "An error occurred while fetching active athlete check-ins.",
+      message:
+        "An error occurred while fetching active athlete check-ins.",
       error: error.message,
     });
   }
 };
+
 
 
 
@@ -1630,7 +1363,7 @@ exports.bulkUploadAthletes = async (req, res) => {
       });
     } else if (
       file.mimetype ===
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
       file.mimetype === "application/vnd.ms-excel"
     ) {
       const workbook = xlsx.read(file.buffer, { type: "buffer" });

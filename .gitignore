@@ -27,12 +27,14 @@ build/
 Dockerfile
 docker-compose.yml
 .dockerignore
-
+public/
 # Temporary files
 *.tmp
 *.temp
 tmp/
 temp/
+bin/www
+config/
 
 # Test coverage reports
 coverage/

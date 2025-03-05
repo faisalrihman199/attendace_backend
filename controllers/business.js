@@ -7,7 +7,6 @@ const path = require('path');
 const Sequelize = require("sequelize")
 const sequelize  = require("../config/db");
 const { Op } = require("sequelize");
-const { log } = require("console");
 const { sendEmail } = require("../config/nodemailer");
 
 require('dotenv').config();
@@ -649,127 +648,126 @@ exports.createBusiness = async (req, res) => {
 
 
 
+
 exports.deleteBusiness = async (req, res) => {
-    const transaction = await sequelize.transaction(); // Start a transaction
-    try {
-        const user = req.user; // Authenticated user from middleware
+  const transaction = await sequelize.transaction(); // Start a transaction
+  try {
+    const user = req.user; // Authenticated user from middleware
 
-        // Check if the user is a superAdmin
-        if (user.role !== 'superAdmin') {
-            return res.status(403).json({
-                success: false,
-                message: 'Only superAdmin users are authorized to delete businesses.',
-            });
-        }
-
-        const { businessId } = req.params; // Get the business ID from the request parameters
-
-        // Check if the business exists
-        const business = await model.business.findOne({
-            where: { id: businessId },
-            include: [{ model: model.user }],
-            transaction, // Use the transaction
-        });
-
-        if (!business) {
-            await transaction.rollback(); // Roll back the transaction
-            return res.status(404).json({
-                success: false,
-                message: 'Business not found.',
-            });
-        }
-
-        const businessUser = business.user; // Get the associated user
-        if (!businessUser) {
-            await transaction.rollback(); // Roll back the transaction
-            return res.status(404).json({
-                success: false,
-                message: 'No user is associated with this business.',
-            });
-        }
-
-        // Step 1: Fetch the Stripe customer using user metadata
-        let stripeCustomerId;
-        const customers = await stripe.customers.search({
-            query: `metadata['user_id']:'${businessUser.id}'`,
-        });
-
-        if (customers.data.length > 0) {
-            stripeCustomerId = customers.data[0].id;
-        } else {
-            stripeCustomerId = null; // If no customer is found, proceed without deleting
-        }
-
-        // Step 2: Check if there is an active subscription for the user
-        const subscription = await model.subscription.findOne({
-            where: { userId: businessUser.id, subscriptionStatus: 'active' },
-            transaction, // Use the transaction
-        });
-
-        let canceledSubscription;
-        if (subscription) {
-            // If the subscription exists, cancel it with Stripe
-            try {
-                canceledSubscription = await stripe.subscriptions.cancel(subscription.subscriptionId); // Cancel subscription with Stripe
-            } catch (stripeError) {
-                await transaction.rollback(); // Roll back the transaction
-                return res.status(500).json({
-                    success: false,
-                    message: 'Error occurred while canceling the subscription in Stripe.',
-                    error: stripeError.message,
-                });
-            }
-
-            // Step 3: Update the subscription status in the database
-            await model.subscription.destroy(
-                
-                { where: { subscriptionId: subscription.subscriptionId }, transaction } // Use the transaction
-            );
-        }
-
-        // Step 4: Delete the Stripe customer
-        if (stripeCustomerId) {
-            try {
-                await stripe.customers.del(stripeCustomerId); // Delete the customer from Stripe
-            } catch (stripeError) {
-                await transaction.rollback(); // Roll back the transaction
-                return res.status(500).json({
-                    success: false,
-                    message: 'Error occurred while deleting the customer in Stripe.',
-                    error: stripeError.message,
-                });
-            }
-        }
-
-        // Step 5: Proceed with deletion of the business and associated data
-        // Soft delete the user
-        await businessUser.destroy({ transaction }); // Use the transaction
-
-        // Soft delete the business
-        await business.destroy({ transaction }); // Use the transaction
-
-        // Soft delete related athlete groups
-        await model.AthleteGroup.update(
-            { deletedAt: new Date() },
-            { where: { businessId: businessId }, transaction } // Use the transaction
-        );
-
-        await transaction.commit(); // Commit the transaction
-
-        return res.status(200).json({
-            success: true,
-            message: 'Business deleted successfully.',
-        });
-    } catch (error) {
-        if (transaction) await transaction.rollback(); // Roll back the transaction on error
-        console.error('Error deleting business:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'An error occurred while deleting the business.',
-            error: error.message,
-        });
+    // Only superAdmin users are authorized
+    if (user.role !== 'superAdmin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only superAdmin users are authorized to delete businesses.',
+      });
     }
+
+    const { businessId } = req.params; // Get the business ID from the request parameters
+
+    // Fetch the business along with its associated user
+    const business = await model.business.findOne({
+      where: { id: businessId },
+      include: [{ model: model.user }],
+      transaction,
+    });
+
+    if (!business) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'Business not found.',
+      });
+    }
+
+    const businessUser = business.user; // Get the associated user
+    if (!businessUser) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'No user is associated with this business.',
+      });
+    }
+
+    // Step 1: Fetch the Stripe customer using user metadata
+    let stripeCustomerId = null;
+    const customers = await stripe.customers.search({
+      query: `metadata['user_id']:'${businessUser.id}'`,
+    });
+    if (customers.data.length > 0) {
+      stripeCustomerId = customers.data[0].id;
+    }
+
+    // Step 2: Fetch all active subscriptions for the user
+    const subscriptions = await model.subscription.findAll({
+      where: { userId: businessUser.id, subscriptionStatus: 'active' },
+      transaction,
+    });
+
+    // Process each subscription
+    for (const subscription of subscriptions) {
+      try {
+        // Attempt to cancel the subscription in Stripe
+        await stripe.subscriptions.cancel(subscription.subscriptionId);
+      } catch (stripeError) {
+        // If error indicates that there is no such subscription in Stripe, ignore it
+        if (stripeError.message.includes('No such subscription')) {
+          // Continue processing—subscription does not exist on Stripe so nothing to cancel
+        } else {
+          await transaction.rollback();
+          return res.status(500).json({
+            success: false,
+            message: 'Error occurred while canceling a subscription in Stripe.',
+            error: stripeError.message,
+          });
+        }
+      }
+      // Delete the subscription record from the database
+      await model.subscription.destroy({
+        where: { subscriptionId: subscription.subscriptionId },
+        transaction,
+      });
+    }
+
+    // Step 3: Delete the Stripe customer if one exists
+    if (stripeCustomerId) {
+      try {
+        await stripe.customers.del(stripeCustomerId);
+      } catch (stripeError) {
+        await transaction.rollback();
+        return res.status(500).json({
+          success: false,
+          message: 'Error occurred while deleting the customer in Stripe.',
+          error: stripeError.message,
+        });
+      }
+    }
+
+    // Step 4: Soft delete the business's associated user and business
+    await businessUser.destroy({ transaction });
+    await business.destroy({ transaction });
+
+    // Soft delete related athlete groups
+    await model.AthleteGroup.update(
+      { deletedAt: new Date() },
+      { where: { businessId: businessId }, transaction }
+    );
+
+    await transaction.commit();
+    return res.status(200).json({
+      success: true,
+      message: 'Business deleted successfully.',
+    });
+  } catch (error) {
+    if (transaction) await transaction.rollback();
+    console.error('Error deleting business:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'An error occurred while deleting the business.',
+      error: error.message,
+    });
+  }
 };
+
 
 
 
@@ -1300,7 +1298,9 @@ exports.getBusinessNameandPhoto=async(req,res)=>{
 
 exports.getBusinessStatistics = async (req, res) => {
     try {
-      const { period } = req.query;
+    
+      const { period,group } = req.query;
+
       const user = req.user;
       const userId = user.role === "superAdmin" ? req.query.userId : user.id;
   
@@ -1312,10 +1312,15 @@ exports.getBusinessStatistics = async (req, res) => {
           message: "Business not found for the provided user.",
         });
       }
-  
+      let whereClause={
+        businessId:business.id
+      }
+      if(group){
+        whereClause.category=group
+      }
       // Fetch athlete groups with their athletes
       const athleteGroups = await model.AthleteGroup.findAll({
-        where: { businessId: business.id },
+        where: whereClause,
         include: [{ model: model.Athlete, attributes: ["id"] }],
       });
   
