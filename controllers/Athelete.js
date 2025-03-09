@@ -134,6 +134,7 @@ exports.createAthlete = async (req, res) => {
       athleteGroupIds,
       pin,
       email,
+      message,
     } = req.body;
     const user = req.user;
 
@@ -212,6 +213,7 @@ exports.createAthlete = async (req, res) => {
         dateOfBirth,
         email,
         description,
+        message,
         active: active !== undefined ? active : athlete.active,
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : athlete.photoPath,
       });
@@ -229,6 +231,7 @@ exports.createAthlete = async (req, res) => {
         dateOfBirth,
         email,
         description,
+        message,
         active: active !== undefined ? active : true,
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : null,
       });
@@ -504,36 +507,45 @@ exports.checkInByPin = async (req, res) => {
       checkinTime,
     });
 
-    // Step 5: Fetch the email template
+    // Step 5: Fetch the email template and send the email (if available)
     const emailTemplate = await model.emailTemplate.findOne({
       where: { name: "check_in_notification" },
     });
 
     if (emailTemplate && athlete.email) {
-      // Replace placeholders with actual values
-      const emailContent = emailTemplate.htmlContent
-        .replace(/{{athleteName}}/g, athlete.name)
-        .replace(/{{checkinDate}}/g, checkinDate)
-        .replace(/{{checkinTime}}/g, checkinTime)
-        .replace(/{{businessName}}/g, business.name);
-      const subject = emailTemplate.subject
-        .replace(/{{athleteName}}/g, athlete.name)
-      // Send the email
-      const emailOptions = {
-        to: athlete.email,
-        subject: subject,
-        html: emailContent,
-      };
-      await sendEmail(emailOptions);
+      try {
+        // Replace placeholders with actual values
+        const emailContent = emailTemplate.htmlContent
+          .replace(/{{athleteName}}/g, athlete.name)
+          .replace(/{{checkinDate}}/g, checkinDate)
+          .replace(/{{checkinTime}}/g, checkinTime)
+          .replace(/{{businessName}}/g, business.name);
+        const subject = emailTemplate.subject.replace(
+          /{{athleteName}}/g,
+          athlete.name
+        );
+        // Prepare email options
+        const emailOptions = {
+          to: athlete.email,
+          subject: subject,
+          html: emailContent,
+        };
+        await sendEmail(emailOptions);
+      } catch (emailError) {
+        // Log the email sending error but do not fail the check-in
+        console.error("Error sending email:", emailError);
+      }
     }
 
-    return res.status(201).json({
+    // Return success with HTTP 200 regardless of the email result
+    return res.status(200).json({
       success: true,
       message: "Athlete checked in successfully.",
       data: {
         checkinDate: checkIn.checkinDate,
         checkinTime: checkIn.checkinTime,
         athleteName: athlete.name,
+        athleteMessage: athlete.message,
         photoPath: athlete.photoPath,
         businessId: businessId,
       },
@@ -547,6 +559,7 @@ exports.checkInByPin = async (req, res) => {
     });
   }
 };
+
 
 
 exports.getAllAthletes = async (req, res) => {
@@ -1413,6 +1426,7 @@ exports.bulkUploadAthletes = async (req, res) => {
         dateOfBirth,
         athleteGroupClass,
         athleteGroupName,
+        message,
         email,
       } = row;
 
@@ -1449,6 +1463,7 @@ exports.bulkUploadAthletes = async (req, res) => {
           dateOfBirth,
           description,
           email,
+          message,
         });
         await existingAthlete.setAthleteGroups(athleteGroups); // Add athlete to multiple groups
       } else {
@@ -1459,6 +1474,7 @@ exports.bulkUploadAthletes = async (req, res) => {
           dateOfBirth,
           description,
           email,
+          message
         });
 
         // Add the athlete to the provided athlete groups
