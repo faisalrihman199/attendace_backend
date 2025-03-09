@@ -33,6 +33,10 @@ const Athlete = sequelize.define('Athlete', {
         type: DataTypes.STRING,
         allowNull: true,
     },
+    message: {
+        type: DataTypes.TEXT, 
+        allowNull: true,
+    },
 });
 
 module.exports = Athlete;
