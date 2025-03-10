@@ -2,12 +2,12 @@ const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const transporter = nodemailer.createTransport({
-    host: "smtp.hostinger.com", // SMTP host for your email provider
-    port: 465, // Port for SSL
-    secure: true, // Use true for port 465 (SSL)
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT), 
+    secure: process.env.SMTP_SECURE === "true", 
     auth: {
-        user: process.env.EMAIL, // Email address from environment variables
-        pass: process.env.PASS  // Email password from environment variables
+        user: process.env.EMAIL,
+        pass: process.env.PASS
     }
 });
 
