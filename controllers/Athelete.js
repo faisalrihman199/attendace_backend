@@ -837,21 +837,31 @@ exports.getAthleteCheckins = async (req, res) => {
 
     // Transform data to include groupNames as an array for each athlete
     const checkinData = checkins.map((checkin) => {
-      const athlete = checkin.Athlete;
-      const groupNames = athlete.athleteGroups.map((group) => group.groupName).join(", ");
+  const athlete = checkin.Athlete;
+  const groupNames = athlete.athleteGroups.map((group) => group.groupName).join(", ");
 
-      return {
-        id: checkin.id,
-        createdAt: checkin.checkinDate,
-        checkinTime: checkin.checkinTime,
-        athlete: {
-          pin: athlete.pin,
-          name: athlete.name,
-          photoPath: athlete.photoPath || null,
-          groupNames, // Array of group names
-        },
-      };
-    });
+  // Convert checkinTime to AM/PM format
+  const formattedTime = new Date(`1970-01-01T${checkin.checkinTime}Z`).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZone: 'UTC'
+  });
+
+  return {
+    id: checkin.id,
+    createdAt: checkin.checkinDate,
+    checkinTime: formattedTime,
+    athlete: {
+      pin: athlete.pin,
+      name: athlete.name,
+      photoPath: athlete.photoPath || null,
+      groupNames,
+    },
+  };
+});
+
 
     console.log("checkinData is ", checkinData.length);
 

@@ -11,6 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const sequelize = require("../config/db"); // Adjust the path as necessary
 const { Op } = require('sequelize');
+const { business } = require(".");
 
 require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
@@ -245,6 +246,7 @@ exports.login = async (req, res) => {
         
       // Check if the user has a business
       const hasBusiness = user.business ? user.business.id : false;
+      
       if(hasBusiness){
         if(user?.business?.status!=='active'){
           return res.json({ success: false, message: "Business is inactive" });
@@ -257,7 +259,7 @@ exports.login = async (req, res) => {
           token,
           role: user.role,
           subscriptionStatus,
-          business: hasBusiness, // Return business parameter
+          business: hasBusiness, 
         },
       });
     } else {
@@ -1290,89 +1292,113 @@ exports.updateUser = async (req, res) => {
     });
   }
 };
-
 exports.getUserCards = async (req, res) => {
   try {
-    let userId = req.user.id; // Get the user ID from the authenticated user
-    console.log("user is ", userId);
+    let userId = req.user.id;
+
     if (req.user.role === "superAdmin") {
       userId = req.query.userId;
     }
-    const customerData = await model.subscription.findOne({
-      where: { userId },
-      order: [['createdAt', 'DESC']], // or order by [['id', 'DESC']]
-    });
-    
-    if (!customerData) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "No subscription found for this user.",
+
+    let customerData = null;
+    try {
+      customerData = await model.subscription.findOne({
+        where: { userId },
+        order: [['createdAt', 'DESC']],
+      });
+    } catch (err) {
+      console.error("Error fetching subscription:", err);
+    }
+
+    let plan = null;
+    if (customerData) {
+      try {
+        plan = await model.plan.findOne({
+          where: { id: customerData.paymentPlanId },
         });
-    }
-    console.log("customer data is ", customerData);
-    const plan = await model.plan.findOne({
-      where: {
-        id: customerData.paymentPlanId,
-      },
-    });
-    // Step 1: Search if the customer exists by userId in metadata
-    const customers = await stripe.customers.search({
-      query: `metadata['user_id']:'${userId}'`,
-    });
-
-    if (customers.data.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "No Stripe customer found for this user." });
+      } catch (err) {
+        console.error("Error fetching plan:", err);
+      }
     }
 
-    const customer = customers.data[0]; // Retrieve the first matched customer
-
-    // Step 2: Retrieve the payment methods (cards) for the customer
-    const paymentMethods = await stripe.paymentMethods.list({
-      customer: customer.id,
-      type: "card", // Retrieve only card type payment methods
-    });
-
-    if (paymentMethods.data.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "No cards found for this customer." });
+    // Check for cancelRequested
+    let business = null;
+    try {
+      business = await model.business.findOne({ where: { userId } });
+      if (business && business.cancelRequested) {
+        return res.status(200).json({
+          success: true,
+          message: "Cancel has been requested. Card info is hidden.",
+          data: {
+            plan: null,
+            customer: null,
+            cards: null,
+            cancelRequested: true,
+          },
+        });
+      }
+    } catch (err) {
+      console.error("Error fetching business:", err);
     }
 
-    // Step 3: Extract customer info and payment method details
+    // Find Stripe customer
+    let customer = null;
+    try {
+      const customers = await stripe.customers.search({
+        query: `metadata['user_id']:'${userId}'`,
+      });
+      if (customers.data.length > 0) {
+        customer = customers.data[0];
+      }
+    } catch (err) {
+      console.error("Error searching Stripe customer:", err);
+    }
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "No Stripe customer found for this user.",
+      });
+    }
+
+    // Retrieve cards
+    let cards = [];
+    try {
+      const paymentMethods = await stripe.paymentMethods.list({
+        customer: customer.id,
+        type: "card",
+      });
+
+      cards = paymentMethods.data.map((paymentMethod) => ({
+        brand: paymentMethod.card.brand,
+        last4: paymentMethod.card.last4,
+        exp_month: paymentMethod.card.exp_month,
+        exp_year: paymentMethod.card.exp_year,
+        country: paymentMethod.card.country,
+        cardholder_name: paymentMethod.billing_details.name,
+      }));
+    } catch (err) {
+      console.error("Error fetching payment methods:", err);
+    }
+
     const customerInfo = {
       name: customer.name,
       email: customer.email,
-      country: customer.address?.country || "N/A", // In case the country is not set
+      country: customer.address?.country || "N/A",
     };
 
-    // Map over payment methods to extract the necessary card details
-    const cards = paymentMethods.data.map((paymentMethod) => {
-      return {
-        brand: paymentMethod.card.brand, // e.g., Visa, MasterCard
-        last4: paymentMethod.card.last4, // Last 4 digits of the card
-        exp_month: paymentMethod.card.exp_month, // Expiration month
-        exp_year: paymentMethod.card.exp_year, // Expiration year
-        country: paymentMethod.card.country, // Card issuing country
-        cardholder_name: paymentMethod.billing_details.name, // Cardholder name
-      };
-    });
-
-    // Step 4: Return customer information and card details
     return res.status(200).json({
       success: true,
-      message: "card data successfully",
+      message: "Card data successfully retrieved.",
       data: {
         plan,
         customer: customerInfo,
-        cards: cards,
+        cards,
+        cancelRequested: false,
       },
     });
   } catch (error) {
-    console.error("Error fetching user cards:", error);
+    console.error("Unexpected error in getUserCards:", error);
     return res.status(500).json({
       success: false,
       message: "An error occurred while fetching card information.",
@@ -1380,6 +1406,8 @@ exports.getUserCards = async (req, res) => {
     });
   }
 };
+
+
 
 exports.updateCardInfo = async (req, res) => {
   let userId = req.user.id; // Get userId from the request

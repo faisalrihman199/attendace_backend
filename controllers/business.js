@@ -8,6 +8,8 @@ const Sequelize = require("sequelize")
 const sequelize  = require("../config/db");
 const { Op } = require("sequelize");
 const { sendEmail } = require("../config/nodemailer");
+const { getGroupedAthletesWithCheckins } = require('./getGroupedAthletesWithCheckins');
+
 
 require('dotenv').config();
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
@@ -261,6 +263,7 @@ exports.getAllBusinesses = async (req, res) => {
                     ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
                     status: business.status,
                     timezone: business.timezone,
+                    cancelRequested:business.cancelRequested ,
                     userId: business.user.id,
                     pinLength: business.reporting.pinLength,
                 }));
@@ -307,6 +310,7 @@ exports.getAllBusinesses = async (req, res) => {
                 status: business.status,
                 trialPaid:business.trialPaid,
                 timezone: business.timezone,
+                cancelRequested:business.cancelRequested ,
                 userId: business.user.id,
                 pinLength: business.reporting.pinLength,
             }));
@@ -895,6 +899,56 @@ exports.setBusinessStatusInactive = async (req, res) => {
         });
     }
 };
+
+exports.cancelBusiness = async (req, res) => {
+    try {
+        const { id, request } = req.query;
+
+        if (!id || typeof request === 'undefined') {
+            return res.status(400).json({ success: false, message: 'Missing business id or request parameter.' });
+        }
+
+        // Find the business by ID
+        const business = await model.business.findOne({
+            where:{
+                userId:id
+            }
+        });
+
+        if (!business) {
+            return res.status(404).json({ success: false, message: 'Business not found.' });
+        }
+
+        // Check if current user is owner or admin
+        const isOwner = business.userId === req.user.id;
+        const isAdmin = req.user.role === 'admin' || req.user.role === 'superAdmin';
+
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ success: false, message: 'You do not have permission to perform this action.' });
+        }
+        
+        // Update cancelRequested field
+        business.cancelRequested = request === 'true'; // converts string to boolean
+
+        await business.save();
+
+        return res.status(200).json({
+            success: true,
+            message: `Business Cancel Requested ${business.cancelRequested?"Sent to Admin":"Unsent to Admin"}.`,
+            data: business,
+        });
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            success: false,
+            message: 'Error updating cancel request.',
+            error: error.message,
+        });
+    }
+};
+
+
 exports.updateTrialPaid = async (req, res) => {
     try {
         // Check if the user is a superAdmin
@@ -1299,7 +1353,7 @@ exports.getBusinessNameandPhoto=async(req,res)=>{
 exports.getBusinessStatistics = async (req, res) => {
     try {
     
-      const { period,group } = req.query;
+      const { period,group,groupId } = req.query;
 
       const user = req.user;
       const userId = user.role === "superAdmin" ? req.query.userId : user.id;
@@ -1390,7 +1444,7 @@ exports.getBusinessStatistics = async (req, res) => {
           const logins = await formatLogins(athleteIds, [startDateFilter, today], dateFormat);
   
           const totalCheckins = Object.values(logins).reduce((sum, value) => sum + value, 0);
-          groupData.push({ name: group.groupName, value:totalCheckins });
+          groupData.push({id:group.id, name: group.groupName, value:totalCheckins });
         }
       } else if (period === "monthly") {
         startDateFilter = new Date(today.getFullYear(), 0, 1);
@@ -1404,7 +1458,7 @@ exports.getBusinessStatistics = async (req, res) => {
             return { [month]: logins[i + 1] || 0 };
           });
   
-          groupData.push({ groupName: group.groupName, monthlyLogins: monthLogins });
+          groupData.push({id:group.id, groupName: group.groupName, monthlyLogins: monthLogins });
         }
       }
       else if (period === "weekly") {
@@ -1439,7 +1493,7 @@ exports.getBusinessStatistics = async (req, res) => {
                 });
             }
     
-            groupData.push({ groupName: group.groupName, weeklyLogins });
+            groupData.push({id:group.id, groupName: group.groupName, weeklyLogins });
         }
     }
     
@@ -1467,11 +1521,11 @@ exports.getBusinessStatistics = async (req, res) => {
             const totalLogins = logins.length > 0 ? logins[0].getDataValue("totalLogins") : 0;
             const dayOfWeek = today.toLocaleDateString("en-US", { weekday: "long" });
             const dayDate = `${dayOfWeek}`;
-    
-            groupData.push({ groupName: group.groupName, dailyLogins: [{ [dayDate]: totalLogins }] });
+            groupData.push({id:group.id, groupName: group.groupName, dailyLogins: [{ [dayDate]: totalLogins }] });
         }
     }
     
+
     
     
     
@@ -1509,16 +1563,18 @@ exports.getBusinessStatistics = async (req, res) => {
   
       const totalAthleteGroups = athleteGroups.length;
       const totalAthletes = allAthletes.length;
-  
+      const data2 = await getGroupedAthletesWithCheckins({ businessId: business.id, groupType: group, period: period,groupId });
       return res.status(200).json({
         success: true,
         message: "Business statistics fetched successfully.",
         data:
         
-        {groupData,
+        {
+        groupData,
         totalAthleteGroups,
         totalAthletes,
         last3Logins,
+        newData:data2,
         businessName: business.name,
         businessId: business.id
         }

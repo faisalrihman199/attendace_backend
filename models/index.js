@@ -14,6 +14,7 @@ const business = require("./business")
 const checkin = require("./checkIn")
 const reporting = require("./reporting")
 const emailTemplate = require("./emailTemplate")
+const teamSchedule = require("./teamSchedule")
 
 
 user.hasOne(paymentDetails);
@@ -51,8 +52,11 @@ AthleteGroup.belongsToMany(Athlete, {
     onDelete: 'CASCADE' // Deletes junction table records when an athlete group is deleted
   });
   
+AthleteGroup.hasMany(teamSchedule, { foreignKey: 'athleteGroupId' });
+teamSchedule.belongsTo(AthleteGroup, { foreignKey: 'athleteGroupId' });
 
 Athlete.hasMany(checkin,{ foreignKey: 'athleteId', onDelete: 'CASCADE' })
 checkin.belongsTo(Athlete,{foreignKey: 'athleteId'})
 
-module.exports = {user,tempUser,paymentDetails,paymentHistory,Athlete,AthleteGroup,plan,subscription,business,checkin,reporting,emailTemplate};
+
+module.exports = {user,tempUser,paymentDetails,paymentHistory,Athlete,AthleteGroup,plan,subscription,business,checkin,reporting,emailTemplate,teamSchedule};
