@@ -28,7 +28,7 @@ const Business = sequelize.define('business', {
     trialPaid: { 
         type: DataTypes.BOOLEAN,
         allowNull: false,
-        defaultValue: true,
+        defaultValue: false,
     },
      cancelRequested: {
         type: DataTypes.BOOLEAN,

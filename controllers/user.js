@@ -240,15 +240,28 @@ exports.login = async (req, res) => {
       let subscriptionStatus = user.subscription
         ? user.subscription.subscriptionStatus
         : "inactive";
-      if(subscriptionStatus==='inactive'){
-        subscriptionStatus=user?.business?.trialPaid?'active':'inactive'
+      let trial = false;
+      // If inactive, check trialPaid or createdAt within 1 month
+      if (subscriptionStatus === "inactive") {
+        const createdAt = new Date(user.createdAt);
+        const trialDuration = 30 * 24 * 60 * 60 * 1000; // 30 days
+        const trialEndsAt = new Date(createdAt.getTime() + trialDuration);
+        const now = new Date();
+
+        if (user?.business?.trialPaid || now < trialEndsAt) {
+          subscriptionStatus = "active";
+          if (!user?.business?.trialPaid) {
+            trial = trialEndsAt;
+          }
+        }
       }
-        
+
+
       // Check if the user has a business
       const hasBusiness = user.business ? user.business.id : false;
-      
-      if(hasBusiness){
-        if(user?.business?.status!=='active'){
+
+      if (hasBusiness) {
+        if (user?.business?.status !== 'active') {
           return res.json({ success: false, message: "Business is inactive" });
         }
       }
@@ -257,9 +270,10 @@ exports.login = async (req, res) => {
         message: "Login successful",
         data: {
           token,
+          trial,
           role: user.role,
           subscriptionStatus,
-          business: hasBusiness, 
+          business: hasBusiness,
         },
       });
     } else {
@@ -523,8 +537,8 @@ exports.createSubscription = async (req, res) => {
   const price = req.query.price;
   const { paymentMethodId } = req.body; // Get paymentMethodId from the request body
   const paymentPlan = await model.plan.findOne({ where: { planPrice: price } });
-  
-  
+
+
   const user = await model.user.findOne({ where: { id: userId } });
 
   console.log("Payment Method ID:", paymentMethodId); // Log paymentMethodId for debugging
@@ -535,7 +549,7 @@ exports.createSubscription = async (req, res) => {
 
   const priceId = paymentPlan.planId;
   const planId = paymentPlan.id;
-  
+
 
   try {
     // Step 1: Search if the customer already exists by userId in metadata
@@ -543,8 +557,8 @@ exports.createSubscription = async (req, res) => {
       query: `metadata['user_id']:'${userId}'`,
     });
 
-    
-    
+
+
 
     let customer;
     if (customers.data.length > 0) {
@@ -560,15 +574,15 @@ exports.createSubscription = async (req, res) => {
         },
       });
     }
-    
-    
+
+
     // Step 2: Check for existing active subscriptions
     const existingSubscription = await stripe.subscriptions.list({
       customer: customer.id,
       status: "active",
       limit: 1,
     });
-    
+
     if (existingSubscription.data.length > 0) {
       return res
         .status(200)
@@ -580,7 +594,7 @@ exports.createSubscription = async (req, res) => {
     console.log("Before Attach :", paymentMethodId);
 
     // Step 3: Attach the payment method to the customer
-     await stripe.paymentMethods.attach(paymentMethodId, {
+    await stripe.paymentMethods.attach(paymentMethodId, {
       customer: customer.id,
     });
 
@@ -779,10 +793,9 @@ exports.webhook = async (req, res) => {
             subscriptionId: subscriptionId, // Store the internal subscription ID
           });
           console.log(
-            `Payment ${
-              event.type === "invoice.payment_succeeded"
-                ? "succeeded"
-                : "failed"
+            `Payment ${event.type === "invoice.payment_succeeded"
+              ? "succeeded"
+              : "failed"
             } for invoice: ${invoice.id}`
           );
         } else {
@@ -844,8 +857,7 @@ exports.webhook = async (req, res) => {
             subscriptionId: subscriptionId, // Store the internal subscription ID
           });
           console.log(
-            `Payment intent ${
-              event.type === "payment_intent.succeeded" ? "succeeded" : "failed"
+            `Payment intent ${event.type === "payment_intent.succeeded" ? "succeeded" : "failed"
             }: ${paymentIntent.id}`
           );
         } else {
@@ -1127,7 +1139,7 @@ exports.getPaymentHistory = async (req, res) => {
 exports.getOneUser = async (req, res) => {
   try {
     const user = req.user; // Get the authenticated user
-    const isUser= req.query.userId;
+    const isUser = req.query.userId;
     let userId = user.role === "superAdmin" ? req.query.userId : user.id; // Determine the userId
     if (req.user.role == "superAdmin" && !req.query.userId) {
       userId = req.user.id;
@@ -1169,8 +1181,8 @@ exports.getOneUser = async (req, res) => {
       name = null;
       photo = foundUser.photoPath;
     }
-    else if(userRole === "superAdmin" && isUser){
-        name = business.dataValues.name;
+    else if (userRole === "superAdmin" && isUser) {
+      name = business.dataValues.name;
       photo = business.dataValues.photoPath;
     }
     else {
@@ -1212,18 +1224,18 @@ exports.updateUser = async (req, res) => {
     let user = req.user; // Authenticated user
     let userId = user.role === "superAdmin" ? req.query.userId : user.id; // Determine the userId
     if (req.user.role === "superAdmin" && !req.query.userId) {
-      
+
       userId = req.user.id;
     }
-    
-    
-    
+
+
+
     const { firstName, lastName, email, oldPassword, newPassword } = req.body; // Fields to update
 
     // Find the user to update
     const foundUser = await model.user.findOne({ where: { id: userId } });
     console.log("found user is ", foundUser);
-    
+
     // If the user does not exist, return 404
     if (!foundUser) {
       return res.status(404).json({
@@ -1233,7 +1245,7 @@ exports.updateUser = async (req, res) => {
     }
     const existingEmail = await model.user.findOne({ where: { email } });
     console.log("existing email is ", existingEmail);
-    
+
     if (existingEmail && existingEmail.id.toString() !== userId.toString()) {
       return res.status(400).json({
         success: false,
@@ -1580,10 +1592,10 @@ exports.changeSubscription = async (req, res) => {
 };
 
 
-exports.createEmailTemplate =  async (req, res) => {
+exports.createEmailTemplate = async (req, res) => {
   try {
-    const {id, subject, htmlContent, senderName } = req.body;
-    let  templateId  = id;
+    const { id, subject, htmlContent, senderName } = req.body;
+    let templateId = id;
 
     // Ensure the user has superAdmin role
     const user = req.user;

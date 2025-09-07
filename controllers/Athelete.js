@@ -124,6 +124,37 @@ exports.getUniquePin = async (req, res) => {
 };
 
 
+// helper: normalize/validate `messageShown` from the request
+function parseMessageShown(raw) {
+  if (raw === undefined || raw === null || raw === '') return [];
+  let arr = [];
+
+  if (Array.isArray(raw)) {
+    arr = raw;
+  } else {
+    // Could be JSON string '["email","check-in"]', or "email,check-in"
+    const s = String(raw).trim();
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) arr = parsed;
+      else if (typeof parsed === 'string') arr = parsed.split(',');
+    } catch {
+      arr = s.split(',');
+    }
+  }
+
+  // normalize & filter to allowed values
+  const normalize = (v) => String(v).toLowerCase().trim()
+    .replace(/check[_\s]?in/g, 'check-in'); // checkin/check_in → check-in
+
+  const allowed = new Set(['email', 'check-in']);
+  const uniq = [];
+  for (const v of arr.map(normalize)) {
+    if (allowed.has(v) && !uniq.includes(v)) uniq.push(v);
+  }
+  return uniq;
+}
+
 exports.createAthlete = async (req, res) => {
   try {
     let {
@@ -135,15 +166,22 @@ exports.createAthlete = async (req, res) => {
       pin,
       email,
       message,
+      messageShown, // <-- NEW: read from body
     } = req.body;
-    const user = req.user;
 
-    // Determine userId based on role
+    // Coerce `active` if it comes as a string via multipart/form-data
+    if (typeof active === 'string') {
+      const val = active.toLowerCase();
+      active = (val === 'true' || val === '1' || val === 'on' || val === 'yes');
+    }
+
+    // Parse/validate messageShown to an array ( [] | ["email"] | ["check-in"] | ["email","check-in"] )
+    const messageShownArr = parseMessageShown(messageShown);
+
+    const user = req.user;
     const userId = user.role === "superAdmin" ? req.query.userId : user.id;
 
-    // Fetch the business associated with the userId
     const business = await model.business.findOne({ where: { userId } });
-
     if (!business) {
       return res.status(404).json({
         success: false,
@@ -151,31 +189,47 @@ exports.createAthlete = async (req, res) => {
       });
     }
 
-    // Fetch the athlete groups that belong to the business
+    // All groups owned by this business
     const athleteGroups = await model.AthleteGroup.findAll({
       where: { businessId: business.id },
       attributes: ["id"],
     });
-
     const athleteGroupIdsArray = athleteGroups.map(group => group.id);
+
+    // Normalize incoming athleteGroupIds from FormData
+    // It may be "1,2", ["1","2"], or "[1,2]"
     if (typeof athleteGroupIds === "string") {
-      athleteGroupIds = athleteGroupIds.split(",").map(id => parseInt(id.trim(), 10));
+      const s = athleteGroupIds.trim();
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) {
+          athleteGroupIds = parsed.map((id) => parseInt(id, 10));
+        } else {
+          athleteGroupIds = s.split(",").map((id) => parseInt(id.trim(), 10));
+        }
+      } catch {
+        athleteGroupIds = s.split(",").map((id) => parseInt(id.trim(), 10));
+      }
+    } else if (Array.isArray(athleteGroupIds)) {
+      athleteGroupIds = athleteGroupIds.map((id) => parseInt(id, 10));
     } else {
-      athleteGroupIds = athleteGroupIds.map(id => parseInt(id, 10));
+      athleteGroupIds = [];
     }
 
+    // Parse date
     if (dateOfBirth) {
       const parsedDate = new Date(dateOfBirth);
       if (!isNaN(parsedDate)) {
         dateOfBirth = parsedDate.toISOString().slice(0, 10);
       } else {
-        console.error(`Invalid date format for row: ${JSON.stringify(row)}`);
-        dateOfBirth = null; // Set to null if invalid date
+        console.error(`Invalid date format: ${dateOfBirth}`);
+        dateOfBirth = null;
       }
     } else {
-      dateOfBirth = null; // Set to null if undefined or missing
+      dateOfBirth = null;
     }
-    // Ensure athlete groups are valid
+
+    // Validate groups belong to this business
     if (athleteGroupIds.some(id => !athleteGroupIdsArray.includes(id))) {
       return res.status(404).json({
         success: false,
@@ -183,7 +237,8 @@ exports.createAthlete = async (req, res) => {
       });
     }
 
-    let athlete = await model.Athlete.findOne({
+    // Try find existing athlete by pin scoped to the business groups
+    const athlete = await model.Athlete.findOne({
       where: { pin },
       include: {
         model: model.AthleteGroup,
@@ -191,13 +246,13 @@ exports.createAthlete = async (req, res) => {
         required: false,
       },
     });
+
     const savedBusiness =
       athlete?.athleteGroups?.[0]?.businessId !== undefined &&
       business.id === athlete.athleteGroups[0].businessId;
 
-
     if (athlete && savedBusiness) {
-      // Handle existing athlete
+      // UPDATE existing athlete
       if (req.file && athlete.photoPath) {
         const oldImagePath = path.join(
           __dirname,
@@ -208,23 +263,32 @@ exports.createAthlete = async (req, res) => {
           if (err) console.error("Error deleting old image:", err);
         });
       }
-      athlete = await athlete.update({
+
+      const updatePayload = {
         name,
         dateOfBirth,
         email,
         description,
         message,
-        active: active !== undefined ? active : athlete.active,
+        active: (active !== undefined ? active : athlete.active),
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : athlete.photoPath,
-      });
-      await athlete.setAthleteGroups(athleteGroupIds);
+      };
+
+      // Only overwrite messageShown if the client actually sent it
+      if (Object.prototype.hasOwnProperty.call(req.body, 'messageShown')) {
+        updatePayload.messageShown = messageShownArr; // <-- set array
+      }
+
+      const updated = await athlete.update(updatePayload);
+      await updated.setAthleteGroups(athleteGroupIds);
+
       return res.status(200).json({
         success: true,
         message: "Athlete updated successfully.",
-        data: athlete,
+        data: updated,
       });
     } else {
-      // Handle new athlete creation
+      // CREATE new athlete
       const newAthlete = await model.Athlete.create({
         pin,
         name,
@@ -232,19 +296,19 @@ exports.createAthlete = async (req, res) => {
         email,
         description,
         message,
-        active: active !== undefined ? active : true,
+        messageShown: messageShownArr, // <-- save array
+        active: (active !== undefined ? active : true),
         photoPath: req.file ? `/public/atheletes/${req.file.filename}` : null,
       });
 
       await newAthlete.setAthleteGroups(athleteGroupIds);
 
-      // Generate QR Code for the athlete's pin
+      // QR + email (unchanged behaviour)
       const qrCodeResponse = await axios.get(
         `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(pin)}&size=256x256`,
         { responseType: "arraybuffer" }
       );
 
-      // Fetch the email template from the database
       const emailTemplate = await model.emailTemplate.findOne({ where: { name: "welcome_athlete" } });
       if (!emailTemplate) {
         return res.status(404).json({
@@ -253,25 +317,25 @@ exports.createAthlete = async (req, res) => {
         });
       }
 
-      // Replace all placeholders in the email template
       let finalHtmlContent = emailTemplate.htmlContent
         .replace(/{{athleteName}}/g, name)
-        .replace(/{{dateOfBirth}}/g, dateOfBirth || "N/A")  // If empty, default to "N/A"
+        .replace(/{{dateOfBirth}}/g, dateOfBirth || "N/A")
         .replace(/{{pin}}/g, pin)
-        .replace(/{{description}}/g, description || "No description provided.")  // If empty, default to "No description provided"
-        .replace(/{{qrCodeImage}}/g, "cid:qrcodeImage"); // Embed QR code image as an attachment
-      const subject = emailTemplate.subject
-        .replace(/{{athleteName}}/g, name)
+        .replace(/{{description}}/g, description || "No description provided.")
+        .replace(/{{qrCodeImage}}/g, "cid:qrcodeImage");
+
+      const subject = emailTemplate.subject.replace(/{{athleteName}}/g, name);
+
       const mailOptions = {
         to: email,
-        subject: subject,
+        subject,
         html: finalHtmlContent,
         attachments: [
           {
             filename: "qrcode.png",
             content: qrCodeResponse.data,
             contentType: "image/png",
-            cid: "qrcodeImage",  // Same cid as referenced in the HTML image tag
+            cid: "qrcodeImage",
           },
         ],
       };
@@ -293,6 +357,7 @@ exports.createAthlete = async (req, res) => {
     });
   }
 };
+
 
 exports.sendWelcomeEmail = async (req, res) => {
   try {
@@ -511,8 +576,9 @@ exports.checkInByPin = async (req, res) => {
     const emailTemplate = await model.emailTemplate.findOne({
       where: { name: "check_in_notification" },
     });
+    const messageShown=athlete.messageShown? JSON.parse(athlete.messageShown):[]
 
-    if (emailTemplate && athlete.email) {
+    if (emailTemplate && athlete.email && messageShown.includes('email')) {
       try {
         // Replace placeholders with actual values
         const emailContent = emailTemplate.htmlContent
@@ -536,7 +602,7 @@ exports.checkInByPin = async (req, res) => {
         console.error("Error sending email:", emailError);
       }
     }
-
+    const message=messageShown.includes("check-in")? athlete?.message : ""
     // Return success with HTTP 200 regardless of the email result
     return res.status(200).json({
       success: true,
@@ -545,7 +611,8 @@ exports.checkInByPin = async (req, res) => {
         checkinDate: checkIn.checkinDate,
         checkinTime: checkIn.checkinTime,
         athleteName: athlete.name,
-        athleteMessage: athlete.message,
+        athleteMessage: message,
+        messageShown: messageShown,
         photoPath: athlete.photoPath,
         businessId: businessId,
       },
@@ -1740,7 +1807,7 @@ exports.getAthleteByQuery = async (req, res) => {
     }
 
     // Fetch the athlete with associated athlete groups
-    const athlete = await model.Athlete.findOne({
+    let athlete = await model.Athlete.findOne({
       where: { id },
       include: [
         {
@@ -1758,7 +1825,9 @@ exports.getAthleteByQuery = async (req, res) => {
         message: "Athlete not found.",
       });
     }
-
+    if (athlete.messageShown){
+      athlete.messageShown=JSON.parse(athlete.messageShown)
+    }
     return res.status(200).json({
       success: true,
       message: "Athlete retrieved successfully.",

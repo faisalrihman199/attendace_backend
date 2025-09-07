@@ -15,7 +15,6 @@ router.get("/getPaymentDetails",authmiddleware.authenticate("jwt",{session:false
 router.post("/createSubscription",authmiddleware.authenticate("jwt",{session:false}),controllers.user.createSubscription)
 router.post("/webhook",express.json({type: 'application/json'}),controllers.user.webhook)
 router.get("/getPaymentHistory",authmiddleware.authenticate("jwt",{session:false}),controllers.user.getPaymentDetails)
-router.post("/addSuperAdmin",upload.single('photo'),controllers.user.addOrUpdateSuperAdmin)
 router.post("/contactUs",controllers.user.contactUs)
 router.get("/paymentHistory",authmiddleware.authenticate("jwt",{session:false}),controllers.user.getPaymentHistory)
 router.get("/getOne",authmiddleware.authenticate("jwt",{session:false}),controllers.user.getOneUser)
@@ -26,5 +25,9 @@ router.put("/updateCard",authmiddleware.authenticate("jwt",{session:false}),cont
 router.post("/addMailTemplate",authmiddleware.authenticate("jwt",{session:false}),controllers.user.createEmailTemplate)
 router.post("/sendTemplateMail",authmiddleware.authenticate("jwt",{session:false}),controllers.user.sendBusinessEmail)
 router.get("/getMailTemplates",authmiddleware.authenticate("jwt",{session:false}),controllers.user.getEmailTemplateList)
+
+// not enabled for protection 
+// router.post("/addSuperAdmin",upload.single('photo'),controllers.user.addOrUpdateSuperAdmin)
+
 module.exports = router;
 
