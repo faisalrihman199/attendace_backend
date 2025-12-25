@@ -576,7 +576,7 @@ exports.checkInByPin = async (req, res) => {
     const emailTemplate = await model.emailTemplate.findOne({
       where: { name: "check_in_notification" },
     });
-    const messageShown=athlete.messageShown? JSON.parse(athlete.messageShown):[]
+    const messageShown=parseMessageShown(athlete.messageShown)
 
     if (emailTemplate && athlete.email && messageShown.includes('email')) {
       try {
@@ -602,6 +602,8 @@ exports.checkInByPin = async (req, res) => {
         console.error("Error sending email:", emailError);
       }
     }
+    console.log("Message shown :", messageShown);
+    
     const message=messageShown.includes("check-in")? athlete?.message : ""
     // Return success with HTTP 200 regardless of the email result
     return res.status(200).json({
@@ -1826,7 +1828,7 @@ exports.getAthleteByQuery = async (req, res) => {
       });
     }
     if (athlete.messageShown){
-      athlete.messageShown=JSON.parse(athlete.messageShown)
+      athlete.messageShown=parseMessageShown(athlete.messageShown);
     }
     return res.status(200).json({
       success: true,

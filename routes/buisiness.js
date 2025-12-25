@@ -23,4 +23,5 @@ router.get("/reporting",authmiddleware.authenticate("jwt",{session:false}),contr
 router.put("/updateReporting",authmiddleware.authenticate("jwt",{session:false}),controllers.business.updateReporting)
 router.post("/detail",controllers.business.getBusinessNameandPhoto)
 router.get("/stats",authmiddleware.authenticate("jwt",{session:false}),controllers.business.getBusinessStatistics)
+router.post("/submitWaiver",controllers.business.submitWaiver)
 module.exports = router

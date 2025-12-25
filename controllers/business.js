@@ -266,6 +266,8 @@ exports.getAllBusinesses = async (req, res) => {
                     cancelRequested:business.cancelRequested ,
                     userId: business.user.id,
                     pinLength: business.reporting.pinLength,
+                    waiverText: business.waiverText,
+                    waiverActive: business.waiverActive,
                 }));
 
                 return res.status(200).json({
@@ -313,6 +315,8 @@ exports.getAllBusinesses = async (req, res) => {
                 cancelRequested:business.cancelRequested ,
                 userId: business.user.id,
                 pinLength: business.reporting.pinLength,
+                waiverText: business.waiverText,
+                waiverActive: business.waiverActive,
             }));
 
             return res.status(200).json({
@@ -365,6 +369,8 @@ exports.getAllBusinesses = async (req, res) => {
                 timezone: business.timezone,
                 userId: business.user.id,
                 pinLength: business.reporting.pinLength,
+                waiverText: business.waiverText,
+                waiverActive: business.waiverActive,
             }));
 
             return res.status(200).json({
@@ -404,6 +410,8 @@ exports.getAllBusinesses = async (req, res) => {
             ownerName: `${business.user.firstName || ''} ${business.user.lastName || ''}`.trim(),
             status: business.status,
             userId: business.user.id,
+            waiverText: business.waiverText,
+            waiverActive: business.waiverActive,
         }));
 
         return res.status(200).json({
@@ -531,7 +539,7 @@ exports.createBusiness = async (req, res) => {
         console.log("req is ", req.body);
 
         const user = req.user;
-        const { name, message, timezone } = req.body;
+        const { name, message, timezone, waiverText, waiverActive } = req.body;
         const { pinLength } = req.body;
         const userId = user.role === "superAdmin" ? req.query.userId : user.id; // Use userId from query if superAdmin
         const photoPath = req.file ? `business/${req.file.filename}` : null; // New photo path if uploaded
@@ -568,6 +576,8 @@ exports.createBusiness = async (req, res) => {
             business.message = message || business.message;
             business.timezone = timezone || business.timezone;
             business.photoPath = photoPath || business.photoPath;
+            business.waiverText = waiverText !== undefined ? waiverText : business.waiverText;
+            business.waiverActive = waiverActive !== undefined ? waiverActive : business.waiverActive;
 
             await business.save();
 
@@ -607,6 +617,9 @@ exports.createBusiness = async (req, res) => {
             message,
             photoPath,
             userId: userId,
+            timezone,
+            waiverText,
+            waiverActive: waiverActive || false,
         });
 
         await model.AthleteGroup.create({
@@ -1332,7 +1345,9 @@ exports.getBusinessNameandPhoto=async(req,res)=>{
             data:{
               name:business.name,
               message:business.message,
-              photo:business.photoPath
+              photo:business.photoPath,
+              waiverText:business.waiverText,
+              waiverActive:business.waiverActive
             }
             
         });
@@ -1584,6 +1599,131 @@ exports.getBusinessStatistics = async (req, res) => {
       return res.status(500).json({
         success: false,
         message: "An error occurred while fetching business statistics.",
+        error: error.message,
+      });
+    }
+  };
+
+  // Submit Waiver Form
+  exports.submitWaiver = async (req, res) => {
+    try {
+      const { businessId, athleteName, parentGuardianName, email, phone, agreeToTerms } = req.body;
+
+      // Validate required fields
+      if (!businessId || !athleteName || !parentGuardianName || !email || !phone || !agreeToTerms) {
+        return res.status(400).json({
+          success: false,
+          message: "All fields are required and you must agree to the terms.",
+        });
+      }
+
+      // Get business details including waiver text
+      const business = await model.business.findOne({
+        where: { id: businessId },
+        include: [{ model: model.user }],
+      });
+
+      if (!business) {
+        return res.status(404).json({
+          success: false,
+          message: "Business not found.",
+        });
+      }
+
+      if (!business.waiverActive || !business.waiverText) {
+        return res.status(400).json({
+          success: false,
+          message: "Waiver is not available for this business.",
+        });
+      }
+
+      // Prepare email content for the submitter
+      const submitterEmailContent = `
+        <html>
+          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+              <h2 style="color: #2c5aa0;">Liability Waiver Confirmation</h2>
+              <p>Dear ${parentGuardianName},</p>
+              <p>Thank you for submitting the liability waiver for <strong>${business.name}</strong>.</p>
+              
+              <h3 style="color: #2c5aa0;">Submitted Information:</h3>
+              <ul>
+                <li><strong>Athlete Name:</strong> ${athleteName}</li>
+                <li><strong>Parent/Guardian Name:</strong> ${parentGuardianName}</li>
+                <li><strong>Email:</strong> ${email}</li>
+                <li><strong>Phone:</strong> ${phone}</li>
+                <li><strong>Date Submitted:</strong> ${new Date().toLocaleString()}</li>
+              </ul>
+              
+              <h3 style="color: #2c5aa0;">Liability Waiver:</h3>
+              <div style="padding: 15px; background-color: #f5f5f5; border-left: 4px solid #2c5aa0; margin: 10px 0;">
+                ${business.waiverText.replace(/\n/g, '<br>')}
+              </div>
+              
+              <p style="margin-top: 20px;">You agreed to the terms and conditions on ${new Date().toLocaleDateString()}.</p>
+              
+              <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+              <p style="font-size: 12px; color: #666;">This is an automated confirmation email. Please keep it for your records.</p>
+            </div>
+          </body>
+        </html>
+      `;
+
+      // Prepare email content for the business
+      const businessEmailContent = `
+        <html>
+          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+              <h2 style="color: #2c5aa0;">New Liability Waiver Submission</h2>
+              <p>A new liability waiver has been submitted for your business.</p>
+              
+              <h3 style="color: #2c5aa0;">Submitted Information:</h3>
+              <ul>
+                <li><strong>Athlete Name:</strong> ${athleteName}</li>
+                <li><strong>Parent/Guardian Name:</strong> ${parentGuardianName}</li>
+                <li><strong>Email:</strong> ${email}</li>
+                <li><strong>Phone:</strong> ${phone}</li>
+                <li><strong>Date Submitted:</strong> ${new Date().toLocaleString()}</li>
+              </ul>
+              
+              <h3 style="color: #2c5aa0;">Liability Waiver:</h3>
+              <div style="padding: 15px; background-color: #f5f5f5; border-left: 4px solid #2c5aa0; margin: 10px 0;">
+                ${business.waiverText.replace(/\n/g, '<br>')}
+              </div>
+              
+              <p style="margin-top: 20px;">The submitter agreed to the terms and conditions on ${new Date().toLocaleDateString()}.</p>
+            </div>
+          </body>
+        </html>
+      `;
+
+      // Send email to the submitter
+      await sendEmail({
+        to: email,
+        subject: `Liability Waiver Confirmation - ${business.name}`,
+        html: submitterEmailContent,
+      });
+
+      // Send email to the business
+      const businessEmail = business.user ? business.user.email : null;
+      if (businessEmail) {
+        await sendEmail({
+          to: businessEmail,
+          subject: `New Liability Waiver Submission - ${business.name}`,
+          html: businessEmailContent,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Waiver submitted successfully. Confirmation emails have been sent.",
+      });
+
+    } catch (error) {
+      console.error("Error submitting waiver:", error);
+      return res.status(500).json({
+        success: false,
+        message: "An error occurred while submitting the waiver.",
         error: error.message,
       });
     }

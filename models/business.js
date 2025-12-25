@@ -34,6 +34,16 @@ const Business = sequelize.define('business', {
         type: DataTypes.BOOLEAN,
         allowNull: false,
         defaultValue: false
+    },
+    waiverText: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+        defaultValue: null,
+    },
+    waiverActive: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
     }
 }, 
 {
